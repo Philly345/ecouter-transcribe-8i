@@ -16,53 +16,65 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "No file provided" }, { status: 400 })
     }
 
-    console.log("Starting transcription for file:", file.name)
+    console.log("Starting transcription for file:", file.name, "Language:", language)
 
     // Step 1: Upload file to AssemblyAI
     const uploadResponse = await fetch("https://api.assemblyai.com/v2/upload", {
       method: "POST",
       headers: {
         authorization: ASSEMBLYAI_API_KEY,
+        "content-type": "application/octet-stream",
       },
       body: file,
     })
 
     if (!uploadResponse.ok) {
-      throw new Error("Failed to upload file to AssemblyAI")
+      const errorText = await uploadResponse.text()
+      console.error("Upload error:", uploadResponse.status, errorText)
+      throw new Error(`Failed to upload file to AssemblyAI: ${uploadResponse.status}`)
     }
 
-    const { upload_url } = await uploadResponse.json()
-    console.log("File uploaded to:", upload_url)
+    const uploadData = await uploadResponse.json()
+    const uploadUrl = uploadData.upload_url
+    console.log("File uploaded to:", uploadUrl)
 
     // Step 2: Request transcription
+    const transcriptConfig = {
+      audio_url: uploadUrl,
+      language_code: language,
+      speaker_labels: speakerLabels,
+      punctuate: punctuate,
+      filter_profanity: filterProfanity,
+      auto_highlights: true,
+      sentiment_analysis: true,
+      format_text: true,
+    }
+
+    console.log("Transcription config:", transcriptConfig)
+
     const transcriptResponse = await fetch("https://api.assemblyai.com/v2/transcript", {
       method: "POST",
       headers: {
         authorization: ASSEMBLYAI_API_KEY,
         "content-type": "application/json",
       },
-      body: JSON.stringify({
-        audio_url: upload_url,
-        language_code: language,
-        speaker_labels: speakerLabels,
-        punctuate: punctuate,
-        filter_profanity: filterProfanity,
-        auto_highlights: true,
-        sentiment_analysis: true,
-      }),
+      body: JSON.stringify(transcriptConfig),
     })
 
     if (!transcriptResponse.ok) {
-      throw new Error("Failed to request transcription")
+      const errorText = await transcriptResponse.text()
+      console.error("Transcription request error:", transcriptResponse.status, errorText)
+      throw new Error(`Failed to request transcription: ${transcriptResponse.status}`)
     }
 
-    const { id: transcriptId } = await transcriptResponse.json()
+    const transcriptData = await transcriptResponse.json()
+    const transcriptId = transcriptData.id
     console.log("Transcription started with ID:", transcriptId)
 
     // Step 3: Poll for completion
     let transcript
     let attempts = 0
-    const maxAttempts = 60 // 5 minutes max
+    const maxAttempts = 120 // 10 minutes max (5 second intervals)
 
     while (attempts < maxAttempts) {
       const statusResponse = await fetch(`https://api.assemblyai.com/v2/transcript/${transcriptId}`, {
@@ -71,12 +83,18 @@ export async function POST(request: NextRequest) {
         },
       })
 
+      if (!statusResponse.ok) {
+        console.error("Status check failed:", statusResponse.status)
+        throw new Error("Failed to check transcription status")
+      }
+
       transcript = await statusResponse.json()
-      console.log("Transcription status:", transcript.status)
+      console.log(`Transcription status (attempt ${attempts + 1}):`, transcript.status)
 
       if (transcript.status === "completed") {
         break
       } else if (transcript.status === "error") {
+        console.error("Transcription error:", transcript.error)
         throw new Error("Transcription failed: " + transcript.error)
       }
 
@@ -86,7 +104,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (transcript.status !== "completed") {
-      throw new Error("Transcription timeout")
+      throw new Error("Transcription timeout - please try again with a shorter file")
     }
 
     console.log("Transcription completed, generating summary...")
@@ -97,7 +115,6 @@ export async function POST(request: NextRequest) {
     let insights = "No insights available"
 
     try {
-      // Improved prompt for better summary generation
       const summaryPrompt = `Please analyze this transcript and provide a structured response:
 
 TRANSCRIPT: "${transcript.text}"
@@ -157,14 +174,9 @@ INSIGHTS: [Your insights here]`
         },
       )
 
-      console.log("Gemini API response status:", geminiResponse.status)
-
       if (geminiResponse.ok) {
         const geminiData = await geminiResponse.json()
-        console.log("Gemini API response:", geminiData)
-
         const generatedText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || ""
-        console.log("Generated text:", generatedText)
 
         if (generatedText) {
           // Parse the structured response
@@ -188,14 +200,9 @@ INSIGHTS: [Your insights here]`
           if (insightsMatch) {
             insights = insightsMatch[1].trim()
           }
-
-          console.log("Parsed summary:", summary)
-          console.log("Parsed topics:", topics)
-          console.log("Parsed insights:", insights)
         }
       } else {
-        const errorText = await geminiResponse.text()
-        console.error("Gemini API error:", geminiResponse.status, errorText)
+        console.error("Gemini API error:", geminiResponse.status)
       }
     } catch (error) {
       console.error("Gemini API error:", error)

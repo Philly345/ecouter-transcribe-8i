@@ -1,257 +1,329 @@
 "use client"
 
-import { TypingText } from "@/components/typing-text"
+import { useState } from "react"
+import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
-import { Mic, Clock, Users, Shield, Star, ChevronRight } from "lucide-react"
-import Link from "next/link"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { TypingText } from "@/components/typing-text"
+import { FloatingBubbles } from "@/components/floating-bubbles"
+import { Mic, Zap, Shield, Users, Clock, Download, Star, ArrowRight, Play, Languages } from "lucide-react"
 
 export default function HomePage() {
+  const [selectedLanguage, setSelectedLanguage] = useState("en")
+  const [isTranslating, setIsTranslating] = useState(false)
+
+  const handleLanguageChange = async (languageCode: string) => {
+    if (languageCode === "en") {
+      setSelectedLanguage("en")
+      return
+    }
+
+    setIsTranslating(true)
+    setSelectedLanguage(languageCode)
+
+    // Simulate translation delay
+    setTimeout(() => {
+      setIsTranslating(false)
+    }, 1000)
+  }
+
+  const getTranslatedText = (englishText: string) => {
+    if (selectedLanguage === "en" || isTranslating) return englishText
+
+    // Simple demonstration - in real implementation, you'd translate all text
+    const translations: { [key: string]: { [key: string]: string } } = {
+      es: {
+        "Transform Audio into Intelligent Insights": "Transformar Audio en Perspectivas Inteligentes",
+        "Get Started": "Empezar",
+        "Try Demo": "Probar Demo",
+        "Trusted by 10,000+ users worldwide": "Confiado por más de 10,000 usuarios en todo el mundo",
+      },
+      fr: {
+        "Transform Audio into Intelligent Insights": "Transformer l'Audio en Insights Intelligents",
+        "Get Started": "Commencer",
+        "Try Demo": "Essayer la Démo",
+        "Trusted by 10,000+ users worldwide": "Approuvé par plus de 10 000 utilisateurs dans le monde",
+      },
+      de: {
+        "Transform Audio into Intelligent Insights": "Audio in Intelligente Erkenntnisse Verwandeln",
+        "Get Started": "Loslegen",
+        "Try Demo": "Demo Testen",
+        "Trusted by 10,000+ users worldwide": "Vertraut von über 10.000 Nutzern weltweit",
+      },
+    }
+
+    return translations[selectedLanguage]?.[englishText] || englishText
+  }
+
   return (
     <div className="min-h-screen bg-black text-white relative overflow-hidden">
+      <FloatingBubbles />
+
       {/* Navigation */}
-      <nav className="relative z-10 flex justify-between items-center p-6">
-        <div className="gradient-logo text-xl font-bold">TranscribeAI</div>
-        <div className="space-x-4">
+      <nav className="relative z-10 flex items-center justify-between p-6 md:p-8">
+        <div className="flex items-center space-x-2">
+          <div className="w-8 h-8 bg-white rounded-lg flex items-center justify-center">
+            <Mic className="h-5 w-5 text-black" />
+          </div>
+          <span className="text-xl font-bold">TranscribeAI</span>
+        </div>
+
+        <div className="hidden md:flex items-center space-x-8">
+          <Link href="/features" className="hover:text-gray-300 transition-colors">
+            Features
+          </Link>
+          <Link href="/pricing" className="hover:text-gray-300 transition-colors">
+            Pricing
+          </Link>
+          <Link href="/help" className="hover:text-gray-300 transition-colors">
+            Help
+          </Link>
+
+          {/* Website Language Selector */}
+          <div className="flex items-center space-x-2">
+            <Languages className="h-4 w-4 text-gray-400" />
+            <Select value={selectedLanguage} onValueChange={handleLanguageChange}>
+              <SelectTrigger className="w-32 bg-white/10 border-white/20 text-white text-sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="bg-black border-white/20 text-white max-h-60">
+                <SelectItem value="en">English</SelectItem>
+                <SelectItem value="es">Español</SelectItem>
+                <SelectItem value="fr">Français</SelectItem>
+                <SelectItem value="de">Deutsch</SelectItem>
+                <SelectItem value="zh">中文</SelectItem>
+                <SelectItem value="ja">日本語</SelectItem>
+                <SelectItem value="ko">한국어</SelectItem>
+                <SelectItem value="ar">العربية</SelectItem>
+                <SelectItem value="hi">हिन्दी</SelectItem>
+                <SelectItem value="pt">Português</SelectItem>
+                <SelectItem value="ru">Русский</SelectItem>
+                <SelectItem value="it">Italiano</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        <div className="flex items-center space-x-4">
           <Link href="/login">
             <Button variant="ghost" className="text-white hover:bg-white/10">
-              Login
+              Sign In
             </Button>
           </Link>
-          <Link href="/demo">
-            <Button className="glow-button bg-white text-black hover:bg-gray-200">Try Demo</Button>
+          <Link href="/signup">
+            <Button className="bg-white text-black hover:bg-gray-200">{getTranslatedText("Get Started")}</Button>
           </Link>
         </div>
       </nav>
 
       {/* Hero Section */}
-      <section className="relative z-10 text-center py-20 px-6">
-        <h1 className="gradient-logo text-4xl md:text-6xl font-bold mb-6">
-          Transcribe smarter,
-          <br />
-          not harder.
-        </h1>
+      <div className="relative z-10 max-w-6xl mx-auto px-6 md:px-8 pt-20 pb-32">
+        <div className="text-center space-y-8">
+          <div className="space-y-6">
+            <h1 className="text-5xl md:text-7xl font-bold leading-tight">
+              <TypingText
+                text={getTranslatedText("Transform Audio into Intelligent Insights")}
+                className="bg-gradient-to-r from-white via-gray-200 to-gray-400 bg-clip-text text-transparent"
+              />
+            </h1>
 
-        <div className="text-lg md:text-xl text-gray-300 mb-12 h-8">
-          <TypingText text="AI-powered transcription with speaker identification and smart summaries" />
-        </div>
-
-        <Link href="/demo">
-          <Button size="lg" className="glow-button bg-white text-black hover:bg-gray-200 text-lg px-8 py-4">
-            Try Demo
-            <ChevronRight className="ml-2 h-5 w-5" />
-          </Button>
-        </Link>
-      </section>
-
-      {/* Features Section */}
-      <section className="relative z-10 py-20 px-6">
-        <div className="max-w-6xl mx-auto">
-          <h2 className="text-3xl font-bold text-center mb-16">Powerful Features</h2>
-
-          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-8">
-            {[
-              {
-                icon: Mic,
-                title: "High Accuracy",
-                description: "Advanced AI models ensure 99%+ accuracy for clear audio",
-              },
-              {
-                icon: Users,
-                title: "Speaker ID",
-                description: "Automatically identify and separate different speakers",
-              },
-              {
-                icon: Clock,
-                title: "Fast Processing",
-                description: "Get your transcriptions in minutes, not hours",
-              },
-              {
-                icon: Shield,
-                title: "Secure & Private",
-                description: "Your files are encrypted and automatically deleted",
-              },
-            ].map((feature, index) => (
-              <Card key={index} className="bg-white/5 border-white/10 hover:bg-white/10 transition-colors">
-                <CardContent className="p-6 text-center">
-                  <feature.icon className="h-12 w-12 mx-auto mb-4 text-white" />
-                  <h3 className="text-lg font-semibold mb-2">{feature.title}</h3>
-                  <p className="text-gray-400">{feature.description}</p>
-                </CardContent>
-              </Card>
-            ))}
+            <p className="text-xl md:text-2xl text-gray-300 max-w-3xl mx-auto leading-relaxed">
+              {isTranslating
+                ? "Translating..."
+                : "Advanced AI-powered transcription with speaker identification, sentiment analysis, and intelligent summaries. Upload your audio and get professional results in minutes."}
+            </p>
           </div>
-        </div>
-      </section>
 
-      {/* Testimonials */}
-      <section className="relative z-10 py-20 px-6">
-        <div className="max-w-4xl mx-auto">
-          <h2 className="text-3xl font-bold text-center mb-16">What Our Users Say</h2>
-
-          <div className="grid md:grid-cols-3 gap-8">
-            {[
-              {
-                name: "Sarah Johnson",
-                role: "Journalist",
-                content:
-                  "This tool has revolutionized my interview workflow. The speaker identification is incredibly accurate.",
-                rating: 5,
-              },
-              {
-                name: "Mike Chen",
-                role: "Researcher",
-                content: "Fast, accurate, and the AI summaries save me hours of work. Highly recommended!",
-                rating: 5,
-              },
-              {
-                name: "Emily Davis",
-                role: "Content Creator",
-                content: "Perfect for transcribing my podcast episodes. The quality is consistently excellent.",
-                rating: 5,
-              },
-            ].map((testimonial, index) => (
-              <Card
-                key={index}
-                className="bg-white/5 border-white/10 hover:bg-white/10 transition-all duration-300 hover:scale-105"
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+            <Link href="/signup">
+              <Button size="lg" className="bg-white text-black hover:bg-gray-200 px-8 py-4 text-lg">
+                {getTranslatedText("Get Started")}
+                <ArrowRight className="ml-2 h-5 w-5" />
+              </Button>
+            </Link>
+            <Link href="/demo">
+              <Button
+                size="lg"
+                variant="outline"
+                className="border-white/20 text-white hover:bg-white/10 px-8 py-4 text-lg bg-transparent"
               >
-                <CardContent className="p-6">
-                  <div className="flex mb-4">
-                    {[...Array(testimonial.rating)].map((_, i) => (
-                      <Star key={i} className="h-5 w-5 text-yellow-400 fill-current" />
-                    ))}
-                  </div>
-                  <p className="text-gray-300 mb-4">"{testimonial.content}"</p>
-                  <div>
-                    <p className="font-semibold">{testimonial.name}</p>
-                    <p className="text-gray-400 text-sm">{testimonial.role}</p>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+                <Play className="mr-2 h-5 w-5" />
+                {getTranslatedText("Try Demo")}
+              </Button>
+            </Link>
+          </div>
+
+          <div className="flex items-center justify-center space-x-2 text-gray-400">
+            <div className="flex items-center space-x-1">
+              {[1, 2, 3, 4, 5].map((star) => (
+                <Star key={star} className="h-4 w-4 fill-yellow-400 text-yellow-400" />
+              ))}
+            </div>
+            <span className="text-sm">{getTranslatedText("Trusted by 10,000+ users worldwide")}</span>
           </div>
         </div>
-      </section>
+      </div>
 
-      {/* FAQ Section */}
-      <section className="relative z-10 py-20 px-6">
-        <div className="max-w-3xl mx-auto">
-          <h2 className="text-3xl font-bold text-center mb-16">Frequently Asked Questions</h2>
+      {/* Features Grid */}
+      <div className="relative z-10 max-w-6xl mx-auto px-6 md:px-8 pb-20">
+        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
+          <Card className="bg-white/5 border-white/10 hover:bg-white/10 transition-colors">
+            <CardContent className="p-6">
+              <div className="w-12 h-12 bg-blue-500/20 rounded-lg flex items-center justify-center mb-4">
+                <Mic className="h-6 w-6 text-blue-400" />
+              </div>
+              <h3 className="text-xl font-semibold mb-2">AI Transcription</h3>
+              <p className="text-gray-400">
+                State-of-the-art speech recognition with 99%+ accuracy across 100+ languages
+              </p>
+            </CardContent>
+          </Card>
 
-          <Accordion type="single" collapsible className="space-y-4">
-            {[
-              {
-                question: "What file formats do you support?",
-                answer:
-                  "We support all major audio formats (MP3, WAV, M4A, FLAC, AAC) and video formats (MP4, MOV, AVI, MKV, WMV). Maximum file size is 500MB.",
-              },
-              {
-                question: "How accurate is the transcription?",
-                answer:
-                  "Our AI models achieve 99%+ accuracy for clear audio with minimal background noise. Accuracy may vary based on audio quality, accents, and technical terminology.",
-              },
-              {
-                question: "Do you support multiple languages?",
-                answer:
-                  "Yes, we support over 50 languages including English, Spanish, French, German, Chinese, Japanese, and many more.",
-              },
-              {
-                question: "Is my data secure?",
-                answer:
-                  "Absolutely. All files are encrypted during upload and processing. We automatically delete your files after 30 days, and you can delete them immediately after download.",
-              },
-              {
-                question: "How long does transcription take?",
-                answer:
-                  "Processing time is typically 2-5 minutes per hour of audio, depending on file size and current system load.",
-              },
-            ].map((faq, index) => (
-              <AccordionItem key={index} value={`item-${index}`} className="border-white/10">
-                <AccordionTrigger className="text-left hover:text-gray-300">{faq.question}</AccordionTrigger>
-                <AccordionContent className="text-gray-400">{faq.answer}</AccordionContent>
-              </AccordionItem>
-            ))}
-          </Accordion>
+          <Card className="bg-white/5 border-white/10 hover:bg-white/10 transition-colors">
+            <CardContent className="p-6">
+              <div className="w-12 h-12 bg-green-500/20 rounded-lg flex items-center justify-center mb-4">
+                <Users className="h-6 w-6 text-green-400" />
+              </div>
+              <h3 className="text-xl font-semibold mb-2">Speaker ID</h3>
+              <p className="text-gray-400">Automatically identify and separate different speakers in your audio</p>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-white/5 border-white/10 hover:bg-white/10 transition-colors">
+            <CardContent className="p-6">
+              <div className="w-12 h-12 bg-purple-500/20 rounded-lg flex items-center justify-center mb-4">
+                <Zap className="h-6 w-6 text-purple-400" />
+              </div>
+              <h3 className="text-xl font-semibold mb-2">Smart Summaries</h3>
+              <p className="text-gray-400">AI-generated summaries, key topics, and actionable insights</p>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-white/5 border-white/10 hover:bg-white/10 transition-colors">
+            <CardContent className="p-6">
+              <div className="w-12 h-12 bg-yellow-500/20 rounded-lg flex items-center justify-center mb-4">
+                <Clock className="h-6 w-6 text-yellow-400" />
+              </div>
+              <h3 className="text-xl font-semibold mb-2">Fast Processing</h3>
+              <p className="text-gray-400">
+                Get your transcripts in minutes, not hours. Optimized for speed and accuracy
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-white/5 border-white/10 hover:bg-white/10 transition-colors">
+            <CardContent className="p-6">
+              <div className="w-12 h-12 bg-red-500/20 rounded-lg flex items-center justify-center mb-4">
+                <Shield className="h-6 w-6 text-red-400" />
+              </div>
+              <h3 className="text-xl font-semibold mb-2">Secure & Private</h3>
+              <p className="text-gray-400">Enterprise-grade security with end-to-end encryption and GDPR compliance</p>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-white/5 border-white/10 hover:bg-white/10 transition-colors">
+            <CardContent className="p-6">
+              <div className="w-12 h-12 bg-cyan-500/20 rounded-lg flex items-center justify-center mb-4">
+                <Download className="h-6 w-6 text-cyan-400" />
+              </div>
+              <h3 className="text-xl font-semibold mb-2">Multiple Formats</h3>
+              <p className="text-gray-400">Export in TXT, SRT, VTT, or JSON. Perfect for any workflow</p>
+            </CardContent>
+          </Card>
         </div>
-      </section>
+      </div>
+
+      {/* CTA Section */}
+      <div className="relative z-10 max-w-4xl mx-auto px-6 md:px-8 pb-20">
+        <Card className="bg-gradient-to-r from-blue-600/20 to-purple-600/20 border-white/10">
+          <CardContent className="p-8 md:p-12 text-center">
+            <h2 className="text-3xl md:text-4xl font-bold mb-4">Ready to Transform Your Audio?</h2>
+            <p className="text-xl text-gray-300 mb-8">
+              Join thousands of professionals who trust TranscribeAI for their transcription needs
+            </p>
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+              <Link href="/signup">
+                <Button size="lg" className="bg-white text-black hover:bg-gray-200 px-8 py-4">
+                  Start Free Trial
+                  <ArrowRight className="ml-2 h-5 w-5" />
+                </Button>
+              </Link>
+              <Link href="/contact">
+                <Button
+                  size="lg"
+                  variant="outline"
+                  className="border-white/20 text-white hover:bg-white/10 px-8 py-4 bg-transparent"
+                >
+                  Contact Sales
+                </Button>
+              </Link>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
 
       {/* Footer */}
-      <footer className="relative z-10 border-t border-white/10 py-12 px-6">
-        <div className="max-w-6xl mx-auto">
+      <footer className="relative z-10 border-t border-white/10 bg-black/50 backdrop-blur-sm">
+        <div className="max-w-6xl mx-auto px-6 md:px-8 py-12">
           <div className="grid md:grid-cols-4 gap-8">
-            <div>
-              <div className="gradient-logo text-xl font-bold mb-4">TranscribeAI</div>
-              <p className="text-gray-400">
-                Professional AI-powered transcription service for all your audio and video needs.
-              </p>
+            <div className="space-y-4">
+              <div className="flex items-center space-x-2">
+                <div className="w-8 h-8 bg-white rounded-lg flex items-center justify-center">
+                  <Mic className="h-5 w-5 text-black" />
+                </div>
+                <span className="text-xl font-bold">TranscribeAI</span>
+              </div>
+              <p className="text-gray-400">Advanced AI transcription for professionals and businesses worldwide.</p>
             </div>
 
             <div>
-              <h3 className="font-semibold mb-4 text-base">Product</h3>
-              <ul className="space-y-2 text-gray-400">
-                <li>
-                  <Link href="#" className="hover:text-white">
-                    Features
-                  </Link>
-                </li>
-                <li>
-                  <Link href="#" className="hover:text-white">
-                    Pricing
-                  </Link>
-                </li>
-                <li>
-                  <Link href="#" className="hover:text-white">
-                    API
-                  </Link>
-                </li>
-              </ul>
+              <h3 className="font-semibold mb-4">Product</h3>
+              <div className="space-y-2">
+                <Link href="/features" className="block text-gray-400 hover:text-white transition-colors">
+                  Features
+                </Link>
+                <Link href="/pricing" className="block text-gray-400 hover:text-white transition-colors">
+                  Pricing
+                </Link>
+                <Link href="/api-docs" className="block text-gray-400 hover:text-white transition-colors">
+                  API Docs
+                </Link>
+                <Link href="/status" className="block text-gray-400 hover:text-white transition-colors">
+                  Status
+                </Link>
+              </div>
             </div>
 
             <div>
-              <h3 className="font-semibold mb-4 text-base">Support</h3>
-              <ul className="space-y-2 text-gray-400">
-                <li>
-                  <Link href="#" className="hover:text-white">
-                    Help Center
-                  </Link>
-                </li>
-                <li>
-                  <Link href="#" className="hover:text-white">
-                    Contact
-                  </Link>
-                </li>
-                <li>
-                  <Link href="#" className="hover:text-white">
-                    Status
-                  </Link>
-                </li>
-              </ul>
+              <h3 className="font-semibold mb-4">Support</h3>
+              <div className="space-y-2">
+                <Link href="/help" className="block text-gray-400 hover:text-white transition-colors">
+                  Help Center
+                </Link>
+                <Link href="/contact" className="block text-gray-400 hover:text-white transition-colors">
+                  Contact
+                </Link>
+              </div>
             </div>
 
             <div>
-              <h3 className="font-semibold mb-4 text-base">Legal</h3>
-              <ul className="space-y-2 text-gray-400">
-                <li>
-                  <Link href="#" className="hover:text-white">
-                    Privacy Policy
-                  </Link>
-                </li>
-                <li>
-                  <Link href="#" className="hover:text-white">
-                    Terms of Service
-                  </Link>
-                </li>
-                <li>
-                  <Link href="#" className="hover:text-white">
-                    Cookie Policy
-                  </Link>
-                </li>
-              </ul>
+              <h3 className="font-semibold mb-4">Legal</h3>
+              <div className="space-y-2">
+                <Link href="/privacy" className="block text-gray-400 hover:text-white transition-colors">
+                  Privacy Policy
+                </Link>
+                <Link href="/terms" className="block text-gray-400 hover:text-white transition-colors">
+                  Terms of Service
+                </Link>
+                <Link href="/cookies" className="block text-gray-400 hover:text-white transition-colors">
+                  Cookie Policy
+                </Link>
+              </div>
             </div>
           </div>
 
-          <div className="border-t border-white/10 mt-12 pt-8 text-center text-gray-400">
+          <div className="border-t border-white/10 mt-8 pt-8 text-center text-gray-400">
             <p>&copy; 2024 TranscribeAI. All rights reserved.</p>
           </div>
         </div>

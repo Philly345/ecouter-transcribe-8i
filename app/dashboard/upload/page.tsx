@@ -22,7 +22,10 @@ import {
   Download,
   Eye,
   Sparkles,
+  Globe,
+  AlertCircle,
 } from "lucide-react"
+import { languages } from "@/lib/translation"
 
 interface UploadedFile {
   file: File
@@ -30,6 +33,7 @@ interface UploadedFile {
   progress: number
   status: "uploading" | "processing" | "completed" | "error"
   result?: any
+  error?: string
 }
 
 export default function UploadPage() {
@@ -79,7 +83,18 @@ export default function UploadPage() {
       const isVideo = file.type.startsWith("video/")
       const maxSize = user?.id === "demo_user" ? 100 * 1024 * 1024 : 500 * 1024 * 1024 // 100MB for demo, 500MB for full
       const isUnderLimit = file.size <= maxSize
-      return (isAudio || isVideo) && isUnderLimit
+
+      if (!isAudio && !isVideo) {
+        alert(`${file.name} is not a supported audio or video file`)
+        return false
+      }
+
+      if (!isUnderLimit) {
+        alert(`${file.name} is too large. Maximum size is ${user?.id === "demo_user" ? "100MB" : "500MB"}`)
+        return false
+      }
+
+      return true
     })
 
     // Additional demo check
@@ -122,27 +137,35 @@ export default function UploadPage() {
       formData.append("punctuate", autoPunctuation.toString())
       formData.append("filterProfanity", filterProfanity.toString())
 
+      console.log("Starting transcription with language:", language)
+
       const response = await fetch("/api/transcribe", {
         method: "POST",
         body: formData,
       })
 
       if (!response.ok) {
-        throw new Error("Transcription failed")
+        const errorData = await response.json()
+        throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`)
       }
 
       const result = await response.json()
 
       // Save to files database
-      await fetch("/api/files", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...result,
-          userId: user?.id,
-          status: "completed",
-        }),
-      })
+      try {
+        await fetch("/api/files", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...result,
+            userId: user?.id,
+            status: "completed",
+          }),
+        })
+      } catch (dbError) {
+        console.warn("Failed to save to database:", dbError)
+        // Continue anyway - the transcription was successful
+      }
 
       // Update file status
       setUploadedFiles((prev) =>
@@ -150,8 +173,10 @@ export default function UploadPage() {
       )
     } catch (error) {
       console.error("Transcription error:", error)
+      const errorMessage = error instanceof Error ? error.message : "Unknown error occurred"
+
       setUploadedFiles((prev) =>
-        prev.map((file) => (file.id === uploadedFile.id ? { ...file, status: "error" } : file)),
+        prev.map((file) => (file.id === uploadedFile.id ? { ...file, status: "error", error: errorMessage } : file)),
       )
     }
   }
@@ -163,7 +188,13 @@ export default function UploadPage() {
   const downloadTranscript = (file: UploadedFile) => {
     if (!file.result) return
 
-    const content = `Transcript: ${file.result.transcript}\n\nSummary: ${file.result.summary}\n\nTopics: ${file.result.topics.join(", ")}`
+    const content = `Transcript: ${file.result.transcript}
+
+Summary: ${file.result.summary}
+
+Topics: ${file.result.topics.join(", ")}
+
+Insights: ${file.result.insights}`
     const blob = new Blob([content], { type: "text/plain" })
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
@@ -179,6 +210,13 @@ export default function UploadPage() {
       const transcriptData = encodeURIComponent(JSON.stringify(file.result))
       window.location.href = `/dashboard/transcript?data=${transcriptData}`
     }
+  }
+
+  const retryTranscription = (file: UploadedFile) => {
+    setUploadedFiles((prev) =>
+      prev.map((f) => (f.id === file.id ? { ...f, status: "uploading", progress: 0, error: undefined } : f)),
+    )
+    transcribeFile(file)
   }
 
   const getFileIcon = (file: File) => {
@@ -212,7 +250,7 @@ export default function UploadPage() {
               <div>
                 <p className="font-medium text-blue-400">Demo Mode Active</p>
                 <p className="text-sm text-gray-400">
-                  You can upload up to 3 files in demo mode. Files are not permanently saved.
+                  You can upload up to 3 files (max 100MB each) in demo mode. Files are not permanently saved.
                 </p>
               </div>
             </div>
@@ -296,6 +334,7 @@ export default function UploadPage() {
                         >
                           {uploadedFile.status === "completed" && <CheckCircle className="h-3 w-3 mr-1" />}
                           {uploadedFile.status === "processing" && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
+                          {uploadedFile.status === "error" && <AlertCircle className="h-3 w-3 mr-1" />}
                           {uploadedFile.status.charAt(0).toUpperCase() + uploadedFile.status.slice(1)}
                         </Badge>
 
@@ -309,6 +348,28 @@ export default function UploadPage() {
                         </Button>
                       </div>
                     </div>
+
+                    {/* Error Message */}
+                    {uploadedFile.status === "error" && uploadedFile.error && (
+                      <div className="border-t border-white/10 pt-4">
+                        <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3">
+                          <div className="flex items-start space-x-2">
+                            <AlertCircle className="h-5 w-5 text-red-400 mt-0.5 flex-shrink-0" />
+                            <div className="flex-1">
+                              <p className="text-sm font-medium text-red-400">Transcription Failed</p>
+                              <p className="text-sm text-gray-300 mt-1">{uploadedFile.error}</p>
+                              <Button
+                                size="sm"
+                                onClick={() => retryTranscription(uploadedFile)}
+                                className="mt-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 border-red-500/30"
+                              >
+                                Retry
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Results */}
                     {uploadedFile.status === "completed" && uploadedFile.result && (
@@ -370,6 +431,9 @@ export default function UploadPage() {
                           <Loader2 className="h-4 w-4 animate-spin" />
                           <span className="text-sm">Transcribing audio and generating AI summary...</span>
                         </div>
+                        <p className="text-xs text-gray-400 mt-1">
+                          This may take several minutes depending on file length
+                        </p>
                       </div>
                     )}
                   </div>
@@ -391,24 +455,23 @@ export default function UploadPage() {
             <CardContent className="space-y-6">
               {/* Language */}
               <div className="space-y-2">
-                <label className="text-sm font-medium">Language</label>
+                <label className="text-sm font-medium flex items-center">
+                  <Globe className="h-4 w-4 mr-2" />
+                  Language
+                </label>
                 <Select value={language} onValueChange={setLanguage}>
                   <SelectTrigger className="bg-white/5 border-white/10">
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="en">English</SelectItem>
-                    <SelectItem value="es">Spanish</SelectItem>
-                    <SelectItem value="fr">French</SelectItem>
-                    <SelectItem value="de">German</SelectItem>
-                    <SelectItem value="it">Italian</SelectItem>
-                    <SelectItem value="pt">Portuguese</SelectItem>
-                    <SelectItem value="ru">Russian</SelectItem>
-                    <SelectItem value="ja">Japanese</SelectItem>
-                    <SelectItem value="ko">Korean</SelectItem>
-                    <SelectItem value="zh">Chinese</SelectItem>
+                  <SelectContent className="bg-black border-white/10 text-white max-h-60">
+                    {languages.map((lang) => (
+                      <SelectItem key={lang.code} value={lang.assemblyCode} className="hover:bg-white/10">
+                        {lang.name}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
+                <p className="text-xs text-gray-400">Select the primary language spoken in your audio</p>
               </div>
 
               {/* Quality */}
@@ -519,7 +582,7 @@ export default function UploadPage() {
                 </div>
 
                 <div className="text-xs text-gray-400 space-y-1">
-                  <p>• Max file size: 500MB</p>
+                  <p>• Max file size: {user?.id === "demo_user" ? "100MB" : "500MB"}</p>
                   <p>• Max duration: 4 hours</p>
                   <p>• Min sample rate: 16kHz</p>
                   <p>• Max speakers: 10</p>
