@@ -119,10 +119,10 @@ export default function HomePage() {
       </nav>
 
       {/* Hero Section */}
-      <div className="relative z-10 max-w-6xl mx-auto px-6 md:px-8 pt-20 pb-32">
+      <div className="relative z-10 max-w-6xl mx-auto px-4 sm:px-6 md:px-8 pt-20 pb-32">
         <div className="text-center space-y-8">
           <div className="space-y-6">
-            <h1 className="text-5xl md:text-7xl font-bold leading-tight bg-gradient-to-r from-white via-gray-200 to-gray-400 bg-clip-text text-transparent">
+            <h1 className="text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-bold leading-tight bg-gradient-to-r from-white via-gray-200 to-gray-400 bg-clip-text text-transparent px-4">
               {getTranslatedText("Transform Audio into Intelligent Insights")}
             </h1>
             <p className="text-xl md:text-2xl text-gray-300 max-w-3xl mx-auto leading-relaxed">
@@ -325,5 +325,6 @@ export default function HomePage() {
     </div>
   )
 }
+
 
 
