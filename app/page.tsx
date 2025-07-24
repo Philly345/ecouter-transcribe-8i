@@ -44,7 +44,7 @@ export default function HomePage() {
         "Transform Audio into Intelligent Insights": "Transformer l'Audio en Insights Intelligents",
         "Get Started": "Commencer",
         "Try Demo": "Essayer la Démo",
-        "Trusted by 10,000+ users worldwide": "Approuvé par plus de 10 000 utilisateurs dans le monde",
+        "Trusted by 10,000+ utilisateurs dans le monde": "Approuvé par plus de 10 000 utilisateurs dans le monde",
         "Sign Up": "S'inscrire",
         "Join Waitlist": "Rejoindre la Liste d'Attente",
       },
@@ -77,9 +77,6 @@ export default function HomePage() {
         <div className="hidden md:flex items-center space-x-8">
           <Link href="/features" className="hover:text-gray-300 transition-colors">
             Features
-          </Link>
-          <Link href="/pricing" className="hover:text-gray-300 transition-colors">
-            Pricing
           </Link>
           <Link href="/help" className="hover:text-gray-300 transition-colors">
             Help
@@ -286,9 +283,6 @@ export default function HomePage() {
               <div className="space-y-2">
                 <Link href="/features" className="block text-gray-400 hover:text-white transition-colors">
                   Features
-                </Link>
-                <Link href="/pricing" className="block text-gray-400 hover:text-white transition-colors">
-                  Pricing
                 </Link>
                 <Link href="/api-docs" className="block text-gray-400 hover:text-white transition-colors">
                   API Docs
