@@ -109,7 +109,7 @@ export default function ContactPage() {
                   <div>
                     <h3 className="font-semibold mb-1">Phone Support</h3>
                     <p className="text-gray-400 text-sm mb-2">Speak directly with our support team</p>
-                    <a href="tel:+1-555-123-4567" className="text-blue-400 hover:text-blue-300">
+                    <a href="tel:+1-561-555-7689" className="text-blue-400 hover:text-blue-300">
                       +1 (555) 123-4567
                     </a>
                   </div>
