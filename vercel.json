@@ -3,5 +3,6 @@
     "app/api/transcribe/route.ts": {
       "maxDuration": 300
     }
-  }
+  },
+  "redirects": []
 }
