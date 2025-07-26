@@ -51,7 +51,6 @@ export default function UploadPage() {
   const handleDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault()
     setIsDragActive(false)
-
     const files = Array.from(e.dataTransfer.files)
     processFiles(files)
   }, [])
@@ -72,18 +71,15 @@ export default function UploadPage() {
   }, [])
 
   const processFiles = (files: File[]) => {
-    // Check demo limitations
     if (user?.id === "demo_user" && uploadedFiles.length >= 3) {
-      alert("Demo limit reached! You can only upload 3 files in demo mode. Contact us for unlimited access.")
+      alert("Demo limit reached! You can only upload 3 files in demo mode.")
       return
     }
 
     const acceptedFiles = files.filter((file) => {
       const isAudio = file.type.startsWith("audio/")
       const isVideo = file.type.startsWith("video/")
-
-      // Very conservative size limits to prevent server errors
-      const maxSize = user?.id === "demo_user" ? 15 * 1024 * 1024 : 50 * 1024 * 1024 // 15MB for demo, 50MB for full
+      const maxSize = user?.id === "demo_user" ? 15 * 1024 * 1024 : 50 * 1024 * 1024
       const isUnderLimit = file.size <= maxSize
 
       if (!isAudio && !isVideo) {
@@ -93,14 +89,13 @@ export default function UploadPage() {
 
       if (!isUnderLimit) {
         const maxSizeText = user?.id === "demo_user" ? "15MB" : "50MB"
-        alert(`${file.name} is too large. Maximum size is ${maxSizeText}. For larger files, please contact support.`)
+        alert(`${file.name} is too large. Maximum size is ${maxSizeText}.`)
         return false
       }
 
       return true
     })
 
-    // Additional demo check
     if (user?.id === "demo_user") {
       const remainingSlots = 3 - uploadedFiles.length
       if (acceptedFiles.length > remainingSlots) {
@@ -118,76 +113,54 @@ export default function UploadPage() {
       }))
 
       setUploadedFiles((prev) => [...prev, ...newFiles])
-
-      // Start transcription for each file
-      newFiles.forEach((uploadedFile) => {
-        transcribeFile(uploadedFile)
-      })
+      newFiles.forEach((uploadedFile) => transcribeFile(uploadedFile))
     }
   }
 
   const transcribeFile = async (uploadedFile: UploadedFile) => {
     try {
-      // Update to processing
       setUploadedFiles((prev) =>
-        prev.map((file) => (file.id === uploadedFile.id ? { ...file, status: "processing", progress: 100 } : file)),
+        prev.map((file) => (file.id === uploadedFile.id ? { ...file, status: "processing", progress: 100 } : file))
       )
 
-      const formData = new FormData()
-      formData.append("file", uploadedFile.file)
-      formData.append("language", language)
-      formData.append("speakerLabels", speakerIdentification.toString())
-      formData.append("punctuate", autoPunctuation.toString())
-      formData.append("filterProfanity", filterProfanity.toString())
-
-      console.log("Starting transcription with language:", language)
-
-      const response = await fetch("/api/transcribe", {
+      // 1. Upload to Cloudflare R2
+      const r2FormData = new FormData()
+      r2FormData.append("file", uploadedFile.file)
+      
+      const r2Response = await fetch("/api/upload", {
         method: "POST",
-        body: formData,
+        body: r2FormData,
       })
 
-      let errorMessage = "Unknown error occurred"
+      if (!r2Response.ok) {
+        throw new Error("Failed to upload file to storage")
+      }
+
+      const { key } = await r2Response.json()
+
+      // 2. Start transcription with R2 key
+      const response = await fetch("/api/transcribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          key,
+          language,
+          speakerLabels: speakerIdentification,
+          punctuate: autoPunctuation,
+          filterProfanity,
+          fileName: uploadedFile.file.name,
+          fileSize: uploadedFile.file.size,
+        }),
+      })
 
       if (!response.ok) {
-        // Try to parse JSON error response
-        try {
-          const errorData = await response.json()
-          errorMessage = errorData.error || `HTTP ${response.status}: ${response.statusText}`
-        } catch (jsonError) {
-          // If JSON parsing fails, get text response
-          try {
-            const errorText = await response.text()
-
-            // Handle common server errors
-            if (response.status === 413) {
-              errorMessage = "File too large. Please use a smaller file (max 50MB) or contact support for larger files."
-            } else if (response.status === 408 || response.status === 504) {
-              errorMessage = "Request timeout. Please try with a shorter audio file or contact support."
-            } else if (errorText.includes("Request Entity Too Large")) {
-              errorMessage = "File size exceeds server limit. Please use a smaller file."
-            } else if (errorText.includes("timeout")) {
-              errorMessage = "Processing timeout. Please try with a shorter audio file."
-            } else if (response.status >= 500) {
-              errorMessage = "Server temporarily unavailable. Please try again in a few minutes."
-            } else {
-              errorMessage = `Server error (${response.status}). Please try again or contact support.`
-            }
-          } catch (textError) {
-            errorMessage = `Network error (${response.status}). Please check your connection and try again.`
-          }
-        }
-        throw new Error(errorMessage)
+        const errorData = await response.json().catch(() => null)
+        throw new Error(errorData?.error || "Transcription failed")
       }
 
-      let result
-      try {
-        result = await response.json()
-      } catch (jsonError) {
-        throw new Error("Invalid response from server. Please try again or contact support.")
-      }
+      const result = await response.json()
 
-      // Save to files database
+      // 3. Save to database
       try {
         await fetch("/api/files", {
           method: "POST",
@@ -199,20 +172,20 @@ export default function UploadPage() {
           }),
         })
       } catch (dbError) {
-        console.warn("Failed to save to database:", dbError)
-        // Continue anyway - the transcription was successful
+        console.warn("Database save failed:", dbError)
       }
 
-      // Update file status
       setUploadedFiles((prev) =>
-        prev.map((file) => (file.id === uploadedFile.id ? { ...file, status: "completed", result } : file)),
+        prev.map((file) => (file.id === uploadedFile.id ? { ...file, status: "completed", result } : file))
       )
     } catch (error) {
       console.error("Transcription error:", error)
-      const errorMessage = error instanceof Error ? error.message : "Unknown error occurred"
-
       setUploadedFiles((prev) =>
-        prev.map((file) => (file.id === uploadedFile.id ? { ...file, status: "error", error: errorMessage } : file)),
+        prev.map((file) => (file.id === uploadedFile.id ? { 
+          ...file, 
+          status: "error", 
+          error: error instanceof Error ? error.message : "Unknown error" 
+        } : file))
       )
     }
   }
@@ -223,14 +196,7 @@ export default function UploadPage() {
 
   const downloadTranscript = (file: UploadedFile) => {
     if (!file.result) return
-
-    const content = `Transcript: ${file.result.transcript}
-
-Summary: ${file.result.summary}
-
-Topics: ${file.result.topics.join(", ")}
-
-Insights: ${file.result.insights}`
+    const content = `Transcript: ${file.result.transcript}\n\nSummary: ${file.result.summary}`
     const blob = new Blob([content], { type: "text/plain" })
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
@@ -242,7 +208,6 @@ Insights: ${file.result.insights}`
 
   const viewFullTranscript = (file: UploadedFile) => {
     if (file.result) {
-      // Navigate to transcript view page with file data
       const transcriptData = encodeURIComponent(JSON.stringify(file.result))
       window.location.href = `/dashboard/transcript?data=${transcriptData}`
     }
@@ -250,16 +215,15 @@ Insights: ${file.result.insights}`
 
   const retryTranscription = (file: UploadedFile) => {
     setUploadedFiles((prev) =>
-      prev.map((f) => (f.id === file.id ? { ...f, status: "uploading", progress: 0, error: undefined } : f)),
+      prev.map((f) => (f.id === file.id ? { ...f, status: "uploading", progress: 0, error: undefined } : f))
     )
     transcribeFile(file)
   }
 
   const getFileIcon = (file: File) => {
-    if (file.type.startsWith("audio/")) {
-      return <FileAudio className="h-8 w-8 text-blue-400" />
-    }
-    return <FileVideo className="h-8 w-8 text-purple-400" />
+    return file.type.startsWith("audio/") 
+      ? <FileAudio className="h-8 w-8 text-blue-400" /> 
+      : <FileVideo className="h-8 w-8 text-purple-400" />
   }
 
   const formatFileSize = (bytes: number) => {
@@ -267,12 +231,11 @@ Insights: ${file.result.insights}`
     const k = 1024
     const sizes = ["Bytes", "KB", "MB", "GB"]
     const i = Math.floor(Math.log(bytes) / Math.log(k))
-    return Number.parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i]
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i]
   }
 
   return (
     <div className="p-6 md:p-8 space-y-8">
-      {/* Header */}
       <div>
         <h1 className="text-2xl font-bold mb-2">Upload & Transcribe</h1>
         <p className="text-gray-400">Upload your audio or video files for AI-powered transcription</p>
@@ -286,7 +249,7 @@ Insights: ${file.result.insights}`
               <div>
                 <p className="font-medium text-blue-400">Demo Mode Active</p>
                 <p className="text-sm text-gray-400">
-                  You can upload up to 3 files (max 15MB each) in demo mode. Files are not permanently saved.
+                  You can upload up to 3 files (max 15MB each) in demo mode.
                 </p>
               </div>
             </div>
@@ -295,19 +258,16 @@ Insights: ${file.result.insights}`
       )}
 
       <div className="grid lg:grid-cols-3 gap-8">
-        {/* Upload Area */}
         <div className="lg:col-span-2 space-y-6">
-          {/* Drag & Drop Zone */}
           <Card className="bg-white/5 border-white/10">
             <CardContent className="p-8">
               <div
                 onDrop={handleDrop}
                 onDragOver={handleDragOver}
                 onDragLeave={handleDragLeave}
-                className={`
-                  border-2 border-dashed rounded-lg p-12 text-center cursor-pointer transition-colors
-                  ${isDragActive ? "border-white bg-white/5" : "border-white/20 hover:border-white/40 hover:bg-white/5"}
-                `}
+                className={`border-2 border-dashed rounded-lg p-12 text-center cursor-pointer transition-colors ${
+                  isDragActive ? "border-white bg-white/5" : "border-white/20 hover:border-white/40 hover:bg-white/5"
+                }`}
               >
                 <input
                   type="file"
@@ -319,7 +279,6 @@ Insights: ${file.result.insights}`
                 />
                 <label htmlFor="file-upload" className="cursor-pointer">
                   <Upload className="h-12 w-12 mx-auto mb-4 text-gray-400" />
-
                   {isDragActive ? (
                     <p className="text-base">Drop the files here...</p>
                   ) : (
@@ -329,7 +288,7 @@ Insights: ${file.result.insights}`
                       </p>
                       <p className="text-sm text-gray-400">Supports MP3, MP4, WAV, M4A, FLAC, MOV, AVI, MKV, WMV</p>
                       <p className="text-xs text-yellow-400 mt-2">
-                        ⚠️ Max file size: {user?.id === "demo_user" ? "15MB" : "50MB"} (Contact support for larger files)
+                        ⚠️ Max file size: {user?.id === "demo_user" ? "15MB" : "50MB"}
                       </p>
                     </div>
                   )}
@@ -338,7 +297,6 @@ Insights: ${file.result.insights}`
             </CardContent>
           </Card>
 
-          {/* Uploaded Files */}
           {uploadedFiles.length > 0 && (
             <Card className="bg-white/5 border-white/10">
               <CardHeader>
@@ -349,26 +307,17 @@ Insights: ${file.result.insights}`
                   <div key={uploadedFile.id} className="p-4 bg-white/5 rounded-lg space-y-4">
                     <div className="flex items-center space-x-4">
                       {getFileIcon(uploadedFile.file)}
-
                       <div className="flex-1 min-w-0">
                         <p className="font-medium truncate">{uploadedFile.file.name}</p>
                         <p className="text-sm text-gray-400">{formatFileSize(uploadedFile.file.size)}</p>
-
-                        {uploadedFile.status === "uploading" && (
-                          <Progress value={uploadedFile.progress} className="mt-2" />
-                        )}
+                        {uploadedFile.status === "uploading" && <Progress value={uploadedFile.progress} className="mt-2" />}
                       </div>
-
                       <div className="flex items-center space-x-2">
                         <Badge
                           variant={
-                            uploadedFile.status === "completed"
-                              ? "default"
-                              : uploadedFile.status === "processing"
-                                ? "secondary"
-                                : uploadedFile.status === "error"
-                                  ? "destructive"
-                                  : "outline"
+                            uploadedFile.status === "completed" ? "default" :
+                            uploadedFile.status === "processing" ? "secondary" :
+                            uploadedFile.status === "error" ? "destructive" : "outline"
                           }
                         >
                           {uploadedFile.status === "completed" && <CheckCircle className="h-3 w-3 mr-1" />}
@@ -376,7 +325,6 @@ Insights: ${file.result.insights}`
                           {uploadedFile.status === "error" && <AlertCircle className="h-3 w-3 mr-1" />}
                           {uploadedFile.status.charAt(0).toUpperCase() + uploadedFile.status.slice(1)}
                         </Badge>
-
                         <Button
                           size="sm"
                           variant="ghost"
@@ -388,7 +336,6 @@ Insights: ${file.result.insights}`
                       </div>
                     </div>
 
-                    {/* Error Message */}
                     {uploadedFile.status === "error" && uploadedFile.error && (
                       <div className="border-t border-white/10 pt-4">
                         <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3">
@@ -405,20 +352,6 @@ Insights: ${file.result.insights}`
                                 >
                                   Retry
                                 </Button>
-                                {(uploadedFile.error.includes("too large") ||
-                                  uploadedFile.error.includes("timeout") ||
-                                  uploadedFile.error.includes("unavailable")) && (
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    className="border-blue-500/30 text-blue-400 bg-transparent"
-                                    onClick={() =>
-                                      window.open("mailto:support@transcribeai.com?subject=Upload Support Request")
-                                    }
-                                  >
-                                    Contact Support
-                                  </Button>
-                                )}
                               </div>
                             </div>
                           </div>
@@ -426,18 +359,14 @@ Insights: ${file.result.insights}`
                       </div>
                     )}
 
-                    {/* Results */}
                     {uploadedFile.status === "completed" && uploadedFile.result && (
                       <div className="space-y-4 border-t border-white/10 pt-4">
-                        {/* Summary */}
                         <div>
                           <h4 className="font-medium mb-2 text-green-400">AI Summary</h4>
                           <p className="text-sm text-gray-300 bg-white/5 p-3 rounded-lg">
                             {uploadedFile.result.summary}
                           </p>
                         </div>
-
-                        {/* Topics */}
                         <div>
                           <h4 className="font-medium mb-2 text-blue-400">Topics</h4>
                           <div className="flex flex-wrap gap-2">
@@ -448,16 +377,12 @@ Insights: ${file.result.insights}`
                             ))}
                           </div>
                         </div>
-
-                        {/* Transcript Preview */}
                         <div>
                           <h4 className="font-medium mb-2 text-purple-400">Transcript Preview</h4>
                           <p className="text-sm text-gray-300 bg-white/5 p-3 rounded-lg">
                             {uploadedFile.result.transcript.substring(0, 200)}...
                           </p>
                         </div>
-
-                        {/* Actions */}
                         <div className="flex space-x-2">
                           <Button
                             size="sm"
@@ -484,11 +409,8 @@ Insights: ${file.result.insights}`
                       <div className="border-t border-white/10 pt-4">
                         <div className="flex items-center space-x-2 text-yellow-400">
                           <Loader2 className="h-4 w-4 animate-spin" />
-                          <span className="text-sm">Transcribing audio and generating AI summary...</span>
+                          <span className="text-sm">Transcribing audio...</span>
                         </div>
-                        <p className="text-xs text-gray-400 mt-1">
-                          This may take several minutes depending on file length
-                        </p>
                       </div>
                     )}
                   </div>
@@ -498,7 +420,6 @@ Insights: ${file.result.insights}`
           )}
         </div>
 
-        {/* Settings Panel */}
         <div className="space-y-6">
           <Card className="bg-white/5 border-white/10">
             <CardHeader>
@@ -508,7 +429,6 @@ Insights: ${file.result.insights}`
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-6">
-              {/* Language */}
               <div className="space-y-2">
                 <label className="text-sm font-medium flex items-center">
                   <Globe className="h-4 w-4 mr-2" />
@@ -526,27 +446,10 @@ Insights: ${file.result.insights}`
                     ))}
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-gray-400">Select the primary language spoken in your audio</p>
               </div>
 
-              {/* Quality */}
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Quality</label>
-                <Select value={quality} onValueChange={setQuality}>
-                  <SelectTrigger className="bg-white/5 border-white/10">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="standard">Standard</SelectItem>
-                    <SelectItem value="high">High</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {/* Additional Options */}
               <div className="space-y-4">
                 <label className="text-sm font-medium">Additional Options</label>
-
                 <div className="space-y-3">
                   <div className="flex items-center space-x-2">
                     <Checkbox
@@ -558,21 +461,12 @@ Insights: ${file.result.insights}`
                       Speaker Identification
                     </label>
                   </div>
-
-                  <div className="flex items-center space-x-2">
-                    <Checkbox id="timestamps" checked={includeTimestamps} onCheckedChange={setIncludeTimestamps} />
-                    <label htmlFor="timestamps" className="text-sm">
-                      Include Timestamps
-                    </label>
-                  </div>
-
                   <div className="flex items-center space-x-2">
                     <Checkbox id="profanity" checked={filterProfanity} onCheckedChange={setFilterProfanity} />
                     <label htmlFor="profanity" className="text-sm">
                       Filter Profanity
                     </label>
                   </div>
-
                   <div className="flex items-center space-x-2">
                     <Checkbox id="punctuation" checked={autoPunctuation} onCheckedChange={setAutoPunctuation} />
                     <label htmlFor="punctuation" className="text-sm">
@@ -582,7 +476,6 @@ Insights: ${file.result.insights}`
                 </div>
               </div>
 
-              {/* Processing Time Estimate */}
               <div className="p-4 bg-blue-500/10 border border-blue-500/20 rounded-lg">
                 <div className="flex items-start space-x-2">
                   <Clock className="h-5 w-5 text-blue-400 mt-0.5" />
@@ -593,70 +486,6 @@ Insights: ${file.result.insights}`
                 </div>
               </div>
             </CardContent>
-          </Card>
-
-          {/* Supported Formats */}
-          <Card className="bg-white/5 border-white/10">
-            <CardHeader>
-              <CardTitle
-                className="flex items-center justify-between cursor-pointer"
-                onClick={() => setShowFormats(!showFormats)}
-              >
-                <div className="flex items-center">
-                  <Info className="mr-2 h-5 w-5" />
-                  Supported Formats
-                </div>
-                <Button variant="ghost" size="sm">
-                  {showFormats ? "Hide" : "Show"}
-                </Button>
-              </CardTitle>
-            </CardHeader>
-
-            {showFormats && (
-              <CardContent className="space-y-4">
-                <div>
-                  <h4 className="font-medium mb-2">Audio Formats</h4>
-                  <div className="flex flex-wrap gap-2">
-                    {["MP3", "WAV", "M4A", "FLAC", "AAC"].map((format) => (
-                      <Badge key={format} variant="outline" className="text-xs">
-                        {format}
-                      </Badge>
-                    ))}
-                  </div>
-                </div>
-
-                <div>
-                  <h4 className="font-medium mb-2">Video Formats</h4>
-                  <div className="flex flex-wrap gap-2">
-                    {["MP4", "MOV", "AVI", "MKV", "WMV"].map((format) => (
-                      <Badge key={format} variant="outline" className="text-xs">
-                        {format}
-                      </Badge>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="text-xs text-gray-400 space-y-1">
-                  <p>• Max file size: {user?.id === "demo_user" ? "15MB" : "50MB"}</p>
-                  <p>• Max duration: 1 hour</p>
-                  <p>• Min sample rate: 16kHz</p>
-                  <p>• Max speakers: 10</p>
-                  <p className="text-yellow-400">• For larger files, contact support</p>
-                </div>
-
-                <div>
-                  <h4 className="font-medium mb-2 text-sm">Tips for Better Results</h4>
-                  <ul className="text-xs text-gray-400 space-y-1">
-                    <li>• Use clear audio with minimal background noise</li>
-                    <li>• Avoid overlapping speech</li>
-                    <li>• Keep speakers close to microphone</li>
-                    <li>• Record in a quiet environment</li>
-                    <li>• For files over 50MB, compress or split them</li>
-                    <li>• MP3 and WAV formats work best</li>
-                  </ul>
-                </div>
-              </CardContent>
-            )}
           </Card>
         </div>
       </div>
