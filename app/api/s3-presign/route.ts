@@ -12,12 +12,24 @@ const s3 = new S3Client({
 })
 
 export async function POST(req: NextRequest) {
-  const { fileName, fileType } = await req.json()
-  const Key = `uploads/${Date.now()}-${fileName}`
-  const url = await getSignedUrl(
-    s3,
-    new PutObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key, ContentType: fileType }),
-    { expiresIn: 600 }
-  )
-  return NextResponse.json({ uploadUrl: url, key: Key })
+  try {
+    const { fileName, fileType } = await req.json()
+    
+    // Create a unique key for the file
+    const Key = `uploads/${Date.now()}-${fileName.replace(/\s/g, '_')}`
+    
+    const command = new PutObjectCommand({ 
+        Bucket: process.env.R2_BUCKET_NAME, 
+        Key, 
+        ContentType: fileType 
+    });
+
+    const url = await getSignedUrl(s3, command, { expiresIn: 600 }); // URL expires in 10 minutes
+
+    return NextResponse.json({ uploadUrl: url, key: Key });
+
+  } catch (error) {
+    console.error("Error creating presigned URL:", error);
+    return NextResponse.json({ error: 'Failed to create upload URL.' }, { status: 500 });
+  }
 }
