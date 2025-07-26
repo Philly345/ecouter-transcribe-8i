@@ -4,6 +4,7 @@ import { type NextRequest, NextResponse } from "next/server";
 // Use environment variables for security
 const ASSEMBLYAI_API_KEY = process.env.ASSEMBLYAI_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const R2_PUBLIC_URL = process.env.R2_PUBLIC_URL; // e.g., "your-bucket.public.r2.dev"
 
 // Helper function to create error responses
 function createErrorResponse(message: string, status = 500) {
@@ -12,49 +13,30 @@ function createErrorResponse(message: string, status = 500) {
 
 export async function POST(request: NextRequest) {
   try {
-    // Get form data from request
-    const formData = await request.formData();
+    // Expect JSON with R2 key
+    const { 
+      key, 
+      language = "en", 
+      speakerLabels = false, 
+      punctuate = false, 
+      filterProfanity = false, 
+      fileName, 
+      fileSize 
+    } = await request.json();
+
+    if (!key) {
+      return createErrorResponse("No file key provided", 400);
+    }
     
-    // Extract parameters
-    const audioFile = formData.get("file") as File;
-    const language = formData.get("language")?.toString() || "en";
-    const speakerLabels = formData.get("speakerLabels")?.toString() === "true";
-    const punctuate = formData.get("punctuate")?.toString() === "true";
-    const filterProfanity = formData.get("filterProfanity")?.toString() === "true";
-    const fileName = formData.get("fileName")?.toString() || "audio_file";
-    const fileSize = parseInt(formData.get("fileSize")?.toString() || "0");
-
-    // Validate file
-    if (!audioFile) {
-      return createErrorResponse("No audio file provided", 400);
+    if (!R2_PUBLIC_URL) {
+      return createErrorResponse("R2_PUBLIC_URL environment variable is not configured.", 500);
     }
 
-    // Validate file size (50MB max)
-    const MAX_SIZE = 50 * 1024 * 1024;
-    if (fileSize > MAX_SIZE) {
-      return createErrorResponse(`File size exceeds limit (${MAX_SIZE/1024/1024}MB)`, 413);
-    }
+    // Construct the public URL using the key from R2
+    const audioUrl = `https://${R2_PUBLIC_URL}/${key}`;
+    console.log('Starting transcription for URL:', audioUrl);
 
-    console.log('Starting transcription for file:', fileName);
-
-    // Step 1: Upload file to AssemblyAI
-    const uploadResponse = await fetch("https://api.assemblyai.com/v2/upload", {
-      method: "POST",
-      headers: {
-        authorization: ASSEMBLYAI_API_KEY!,
-      },
-      body: Buffer.from(await audioFile.arrayBuffer())
-    });
-
-    if (!uploadResponse.ok) {
-      const errorData = await uploadResponse.json();
-      return createErrorResponse(`AssemblyAI upload failed: ${errorData.error}`, 502);
-    }
-
-    const { upload_url: audioUrl } = await uploadResponse.json();
-    console.log('File uploaded to AssemblyAI. URL:', audioUrl);
-
-    // Step 2: Request transcription
+    // Step 1: Request transcription from AssemblyAI
     const transcriptConfig = {
       audio_url: audioUrl,
       language_code: language,
@@ -86,7 +68,7 @@ export async function POST(request: NextRequest) {
     }
     console.log("Transcription started with ID:", transcriptId);
 
-    // Step 3: Poll for completion
+    // Step 2: Poll for completion
     let transcript;
     let attempts = 0;
     const maxAttempts = 120; // 10 minutes (5s * 120)
@@ -114,7 +96,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Step 4: Generate summary with Gemini (optional)
+    // Step 3: Generate summary with Gemini (optional)
     let summary = "AI-generated summary not available";
     let topics = ["General Discussion"];
     let insights = "No insights available";
@@ -160,7 +142,7 @@ export async function POST(request: NextRequest) {
       console.warn("Gemini API key not configured. Skipping summary generation.");
     }
     
-    // Step 5: Format final response
+    // Step 4: Format final response
     const result = {
       id: transcriptId,
       transcript: transcript.text,
