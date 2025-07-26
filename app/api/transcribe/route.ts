@@ -1,7 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
 
-const ASSEMBLYAI_API_KEY = "bc57f2d5b98d4271a3edb82d84e83dda"
-const GEMINI_API_KEY = "AIzaSyArajy9zhyYWCnBYs5kcSIaIyL87D652_g"
+const ASSEMBLYAI_API_KEY = process.env.ASSEMBLYAI_API_KEY!
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY!
 
 // Helper function to create error responses
 function createErrorResponse(message: string, status = 500) {
