@@ -74,7 +74,7 @@ export async function POST(request: NextRequest) {
     // Step 3: Poll for completion
     let transcript
     let attempts = 0
-    const maxAttempts = 120 // 10 minutes max (5 second intervals)
+    const maxAttempts = 120
 
     while (attempts < maxAttempts) {
       const statusResponse = await fetch(`https://api.assemblyai.com/v2/transcript/${transcriptId}`, {
@@ -98,7 +98,6 @@ export async function POST(request: NextRequest) {
         throw new Error("Transcription failed: " + transcript.error)
       }
 
-      // Wait 5 seconds before next poll
       await new Promise((resolve) => setTimeout(resolve, 5000))
       attempts++
     }
@@ -153,22 +152,10 @@ INSIGHTS: [Your insights here]`
               maxOutputTokens: 1024,
             },
             safetySettings: [
-              {
-                category: "HARM_CATEGORY_HARASSMENT",
-                threshold: "BLOCK_MEDIUM_AND_ABOVE",
-              },
-              {
-                category: "HARM_CATEGORY_HATE_SPEECH",
-                threshold: "BLOCK_MEDIUM_AND_ABOVE",
-              },
-              {
-                category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                threshold: "BLOCK_MEDIUM_AND_ABOVE",
-              },
-              {
-                category: "HARM_CATEGORY_DANGEROUS_CONTENT",
-                threshold: "BLOCK_MEDIUM_AND_ABOVE",
-              },
+              { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+              { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+              { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+              { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
             ],
           }),
         },
@@ -179,33 +166,26 @@ INSIGHTS: [Your insights here]`
         const generatedText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || ""
 
         if (generatedText) {
-          // Parse the structured response
           const summaryMatch = generatedText.match(/SUMMARY:\s*(.+?)(?=TOPICS:|$)/s)
           const topicsMatch = generatedText.match(/TOPICS:\s*(.+?)(?=INSIGHTS:|$)/s)
           const insightsMatch = generatedText.match(/INSIGHTS:\s*(.+?)$/s)
 
-          if (summaryMatch) {
-            summary = summaryMatch[1].trim()
-          }
-
+          if (summaryMatch) summary = summaryMatch[1].trim()
           if (topicsMatch) {
             const topicsText = topicsMatch[1].trim()
             topics = topicsText
               .split(",")
-              .map((topic) => topic.trim())
-              .filter((topic) => topic.length > 0)
+              .map((t) => t.trim())
+              .filter((t) => t.length > 0)
               .slice(0, 5)
           }
-
-          if (insightsMatch) {
-            insights = insightsMatch[1].trim()
-          }
+          if (insightsMatch) insights = insightsMatch[1].trim()
         }
       } else {
         console.error("Gemini API error:", geminiResponse.status)
       }
     } catch (error) {
-      console.error("Gemini API error:", error)
+      console.error("Gemini API processing error:", error)
     }
 
     // Step 5: Format response
@@ -241,8 +221,25 @@ INSIGHTS: [Your insights here]`
 
     console.log("Transcription completed successfully")
     return NextResponse.json(result)
-  } catch (error) {
+  } catch (error: any) {
     console.error("Transcription error:", error)
-    return NextResponse.json({ error: "Transcription failed: " + (error as Error).message }, { status: 500 })
+
+    const message =
+      error instanceof Error
+        ? error.message
+        : typeof error === "string"
+        ? error
+        : "An unknown error occurred during transcription"
+
+    return new NextResponse(
+      JSON.stringify({ error: "Transcription failed: " + message }),
+      {
+        status: 500,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      }
+    )
   }
 }
+
