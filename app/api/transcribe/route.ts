@@ -21,9 +21,6 @@ function isHtmlResponse(text: string): boolean {
   )
 }
 
-// NOTE: The 'export const config' object was removed as it's deprecated in Next.js 14+.
-// The new architecture doesn't require it.
-
 export async function POST(request: NextRequest) {
   try {
     // Step 1: Get the R2 file key and other options from the JSON request body.
@@ -46,8 +43,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Construct the public URL for the file in Cloudflare R2.
-    // NOTE: This assumes your R2 bucket is public.
-    const audioUrl = `https://://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${R2_BUCKET_NAME}/${key}`
+    const audioUrl = `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${R2_BUCKET_NAME}/${key}`
 
     console.log('Starting transcription for URL:', audioUrl)
 
@@ -90,7 +86,14 @@ export async function POST(request: NextRequest) {
           return createErrorResponse("Authentication failed. Please try again.", 401)
         }
         if (transcriptResponse.status === 400) {
-          return createErrorResponse("Invalid transcription request. Please check your file and try again.", 400)
+          // Attempt to parse error from AssemblyAI
+          try {
+            const errorJson = JSON.parse(transcriptResponseText);
+            const errorMessage = errorJson.error || "Invalid transcription request.";
+            return createErrorResponse(`Transcription failed: ${errorMessage}`, 400);
+          } catch {
+            return createErrorResponse("Invalid transcription request. Please check your file and try again.", 400);
+          }
         }
 
         return createErrorResponse(
@@ -99,7 +102,6 @@ export async function POST(request: NextRequest) {
         )
       }
 
-      // Check if transcription response is HTML too
       if (isHtmlResponse(transcriptResponseText)) {
         console.error("Transcription service returned HTML:", transcriptResponseText.substring(0, 500))
         return createErrorResponse("Transcription service error. Please try again.", 502)
@@ -110,7 +112,8 @@ export async function POST(request: NextRequest) {
         console.log("Successfully parsed transcription response:", transcriptData)
       } catch (parseError) {
         console.error("Failed to parse transcription response:", parseError)
-        return createErrorResponse("Invalid response from transcription service. Please try again.", 502)
+        console.error("Response that failed parsing:", transcriptResponseText)
+        return createErrorResponse(`Invalid response from transcription service: ${parseError.message}`, 502)
       }
     } catch (error) {
       console.error("Transcription request failed:", error)
@@ -142,7 +145,7 @@ export async function POST(request: NextRequest) {
 
         if (!statusResponse.ok) {
           console.error("Status check failed:", statusResponse.status)
-          if (attempts > 5) { // Stop if it consistently fails
+          if (attempts > 5) { 
             return createErrorResponse("Failed to check transcription status. Please try again.", 502)
           }
         } else {
@@ -167,8 +170,9 @@ export async function POST(request: NextRequest) {
               }
             } catch (parseError) {
               console.error("Failed to parse status response:", parseError)
+              console.error("Response that failed parsing:", statusText)
               if (attempts > 5) {
-                return createErrorResponse("Invalid response from transcription service. Please try again.", 502)
+                return createErrorResponse(`Invalid response from transcription service: ${parseError.message}`, 502)
               }
             }
           }
@@ -178,7 +182,7 @@ export async function POST(request: NextRequest) {
         attempts++
       } catch (error) {
         console.error("Status polling error:", error)
-        if (attempts > 10) { // Stop after several network errors
+        if (attempts > 10) { 
           return createErrorResponse("Network error during transcription. Please try again.", 500)
         }
         await new Promise((resolve) => setTimeout(resolve, 5000))
@@ -204,7 +208,7 @@ export async function POST(request: NextRequest) {
     try {
       console.log("Generating AI summary...")
 
-      const maxTranscriptLength = 32000; // Gemini 1.5 Flash token limit
+      const maxTranscriptLength = 32000;
       const transcriptSnippet = transcript.text.length > maxTranscriptLength
         ? transcript.text.substring(0, maxTranscriptLength) + "...[truncated]"
         : transcript.text;
@@ -308,6 +312,9 @@ INSIGHTS: [Your insights here]`
   } catch (error) {
     console.error("Unexpected transcription error:", error)
 
+    if (error instanceof SyntaxError) {
+        return createErrorResponse(`JSON Parsing Error: ${error.message}. Please check API responses.`, 500);
+    }
     if (error instanceof Error) {
       if (error.message.includes("timeout")) {
         return createErrorResponse("Request timeout. Please try with a smaller file.", 408)
