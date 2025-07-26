@@ -81,7 +81,9 @@ export default function UploadPage() {
     const acceptedFiles = files.filter((file) => {
       const isAudio = file.type.startsWith("audio/")
       const isVideo = file.type.startsWith("video/")
-      const maxSize = user?.id === "demo_user" ? 100 * 1024 * 1024 : 500 * 1024 * 1024 // 100MB for demo, 500MB for full
+
+      // Very conservative size limits to prevent server errors
+      const maxSize = user?.id === "demo_user" ? 15 * 1024 * 1024 : 50 * 1024 * 1024 // 15MB for demo, 50MB for full
       const isUnderLimit = file.size <= maxSize
 
       if (!isAudio && !isVideo) {
@@ -90,7 +92,8 @@ export default function UploadPage() {
       }
 
       if (!isUnderLimit) {
-        alert(`${file.name} is too large. Maximum size is ${user?.id === "demo_user" ? "100MB" : "500MB"}`)
+        const maxSizeText = user?.id === "demo_user" ? "15MB" : "50MB"
+        alert(`${file.name} is too large. Maximum size is ${maxSizeText}. For larger files, please contact support.`)
         return false
       }
 
@@ -144,12 +147,45 @@ export default function UploadPage() {
         body: formData,
       })
 
+      let errorMessage = "Unknown error occurred"
+
       if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`)
+        // Try to parse JSON error response
+        try {
+          const errorData = await response.json()
+          errorMessage = errorData.error || `HTTP ${response.status}: ${response.statusText}`
+        } catch (jsonError) {
+          // If JSON parsing fails, get text response
+          try {
+            const errorText = await response.text()
+
+            // Handle common server errors
+            if (response.status === 413) {
+              errorMessage = "File too large. Please use a smaller file (max 50MB) or contact support for larger files."
+            } else if (response.status === 408 || response.status === 504) {
+              errorMessage = "Request timeout. Please try with a shorter audio file or contact support."
+            } else if (errorText.includes("Request Entity Too Large")) {
+              errorMessage = "File size exceeds server limit. Please use a smaller file."
+            } else if (errorText.includes("timeout")) {
+              errorMessage = "Processing timeout. Please try with a shorter audio file."
+            } else if (response.status >= 500) {
+              errorMessage = "Server temporarily unavailable. Please try again in a few minutes."
+            } else {
+              errorMessage = `Server error (${response.status}). Please try again or contact support.`
+            }
+          } catch (textError) {
+            errorMessage = `Network error (${response.status}). Please check your connection and try again.`
+          }
+        }
+        throw new Error(errorMessage)
       }
 
-      const result = await response.json()
+      let result
+      try {
+        result = await response.json()
+      } catch (jsonError) {
+        throw new Error("Invalid response from server. Please try again or contact support.")
+      }
 
       // Save to files database
       try {
@@ -250,7 +286,7 @@ Insights: ${file.result.insights}`
               <div>
                 <p className="font-medium text-blue-400">Demo Mode Active</p>
                 <p className="text-sm text-gray-400">
-                  You can upload up to 3 files (max 100MB each) in demo mode. Files are not permanently saved.
+                  You can upload up to 3 files (max 15MB each) in demo mode. Files are not permanently saved.
                 </p>
               </div>
             </div>
@@ -292,6 +328,9 @@ Insights: ${file.result.insights}`
                         Drag & drop your files here, or <span className="text-white underline">browse</span>
                       </p>
                       <p className="text-sm text-gray-400">Supports MP3, MP4, WAV, M4A, FLAC, MOV, AVI, MKV, WMV</p>
+                      <p className="text-xs text-yellow-400 mt-2">
+                        ⚠️ Max file size: {user?.id === "demo_user" ? "15MB" : "50MB"} (Contact support for larger files)
+                      </p>
                     </div>
                   )}
                 </label>
@@ -358,13 +397,29 @@ Insights: ${file.result.insights}`
                             <div className="flex-1">
                               <p className="text-sm font-medium text-red-400">Transcription Failed</p>
                               <p className="text-sm text-gray-300 mt-1">{uploadedFile.error}</p>
-                              <Button
-                                size="sm"
-                                onClick={() => retryTranscription(uploadedFile)}
-                                className="mt-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 border-red-500/30"
-                              >
-                                Retry
-                              </Button>
+                              <div className="flex space-x-2 mt-3">
+                                <Button
+                                  size="sm"
+                                  onClick={() => retryTranscription(uploadedFile)}
+                                  className="bg-red-500/20 hover:bg-red-500/30 text-red-400 border-red-500/30"
+                                >
+                                  Retry
+                                </Button>
+                                {(uploadedFile.error.includes("too large") ||
+                                  uploadedFile.error.includes("timeout") ||
+                                  uploadedFile.error.includes("unavailable")) && (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="border-blue-500/30 text-blue-400 bg-transparent"
+                                    onClick={() =>
+                                      window.open("mailto:support@transcribeai.com?subject=Upload Support Request")
+                                    }
+                                  >
+                                    Contact Support
+                                  </Button>
+                                )}
+                              </div>
                             </div>
                           </div>
                         </div>
@@ -582,10 +637,11 @@ Insights: ${file.result.insights}`
                 </div>
 
                 <div className="text-xs text-gray-400 space-y-1">
-                  <p>• Max file size: {user?.id === "demo_user" ? "100MB" : "500MB"}</p>
-                  <p>• Max duration: 4 hours</p>
+                  <p>• Max file size: {user?.id === "demo_user" ? "15MB" : "50MB"}</p>
+                  <p>• Max duration: 1 hour</p>
                   <p>• Min sample rate: 16kHz</p>
                   <p>• Max speakers: 10</p>
+                  <p className="text-yellow-400">• For larger files, contact support</p>
                 </div>
 
                 <div>
@@ -595,6 +651,8 @@ Insights: ${file.result.insights}`
                     <li>• Avoid overlapping speech</li>
                     <li>• Keep speakers close to microphone</li>
                     <li>• Record in a quiet environment</li>
+                    <li>• For files over 50MB, compress or split them</li>
+                    <li>• MP3 and WAV formats work best</li>
                   </ul>
                 </div>
               </CardContent>
@@ -605,3 +663,4 @@ Insights: ${file.result.insights}`
     </div>
   )
 }
+
