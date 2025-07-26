@@ -1,30 +1,59 @@
-import { type NextRequest, NextResponse } from "next/server"
+// app/api/transcribe/route.ts
+import { type NextRequest, NextResponse } from "next/server";
 
-const ASSEMBLYAI_API_KEY = process.env.ASSEMBLYAI_API_KEY
-const GEMINI_API_KEY     = process.env.GEMINI_API_KEY
+const ASSEMBLYAI_API_KEY = process.env.ASSEMBLYAI_API_KEY!;
+const GEMINI_API_KEY     = process.env.GEMINI_API_KEY!;
 
 export const config = {
-  api: { bodyParser: { sizeLimit: '1kb' } }, // only needs to parse JSON keys
-}
+  api: { bodyParser: { sizeLimit: "1kb" } }, // tiny JSON only
+};
 
+// ---------- helpers ----------
 function createErrorResponse(message: string, status = 500) {
-  return NextResponse.json({ error: message }, { status })
+  return NextResponse.json({ error: message }, { status });
 }
 
 function isHtmlResponse(text: string): boolean {
-  const trimmed = text.trim()
-  return trimmed.startsWith("<") || trimmed.includes("<!DOCTYPE") || trimmed.includes("<html")
+  const trimmed = text.trim();
+  return (
+    trimmed.startsWith("<") ||
+    trimmed.includes("<!DOCTYPE") ||
+    trimmed.includes("<html") ||
+    trimmed.includes("<HTML")
+  );
 }
 
+// ---------- main ----------
 export async function POST(request: NextRequest) {
   try {
-    const { key, language = "en", speakerLabels, punctuate, filterProfanity } = await request.json()
+    /* 1️⃣ read JSON payload */
+    const {
+      key,
+      language = "en",
+      speakerLabels = false,
+      punctuate = true,
+      filterProfanity = false,
+    } = await request.json();
 
-    if (!key) return createErrorResponse("Missing R2 object key", 400)
+    if (!key) {
+      return createErrorResponse("No key provided", 400);
+    }
 
-    const audioUrl = `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${key}`
-    console.log("Starting transcription for URL:", audioUrl)
+    /* 2️⃣ build public Cloudflare-R2 URL */
+    const audioUrl = `https://${process.env.R2_BUCKET_NAME}.r2.cloudflarestorage.com/${key}`;
 
+    console.log(
+      "Starting transcription for URL:",
+      audioUrl,
+      "Language:",
+      language,
+      "Speaker Labels:",
+      speakerLabels
+    );
+
+    /* ---------- Step 1: Upload to AssemblyAI NOT needed ---------- */
+
+    /* ---------- Step 2: Request transcription ---------- */
     const transcriptConfig = {
       audio_url: audioUrl,
       language_code: language,
@@ -34,71 +63,194 @@ export async function POST(request: NextRequest) {
       auto_highlights: true,
       sentiment_analysis: true,
       format_text: true,
-    }
+    };
 
-    const transcriptResponse = await fetch("https://api.assemblyai.com/v2/transcript", {
-      method: "POST",
-      headers: {
-        authorization: ASSEMBLYAI_API_KEY!,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(transcriptConfig),
-    })
+    let transcriptResponse;
+    let transcriptData;
 
-    const transcriptResponseText = await transcriptResponse.text()
-
-    if (!transcriptResponse.ok || isHtmlResponse(transcriptResponseText)) {
-      console.error("Failed to start transcription:", transcriptResponse.status, transcriptResponseText)
-      return createErrorResponse("Failed to start transcription. Please try again.", 502)
-    }
-
-    const transcriptData = JSON.parse(transcriptResponseText)
-    const transcriptId = transcriptData.id
-    if (!transcriptId) return createErrorResponse("No transcript ID returned", 502)
-
-    // Polling for completion
-    let attempts = 0
-    let transcript = null
-    while (attempts < 60) {
-      const statusRes = await fetch(`https://api.assemblyai.com/v2/transcript/${transcriptId}`, {
-        headers: { authorization: ASSEMBLYAI_API_KEY! },
-      })
-
-      const statusText = await statusRes.text()
-      if (isHtmlResponse(statusText)) break
-
-      try {
-        transcript = JSON.parse(statusText)
-        if (transcript.status === "completed") break
-        if (transcript.status === "error") {
-          return createErrorResponse(`Transcription failed: ${transcript.error}`, 500)
+    try {
+      transcriptResponse = await fetch(
+        "https://api.assemblyai.com/v2/transcript",
+        {
+          method: "POST",
+          headers: {
+            authorization: ASSEMBLYAI_API_KEY,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(transcriptConfig),
         }
-      } catch {
-        console.warn("Polling JSON parse error, retrying...")
+      );
+
+      console.log("Transcription request status:", transcriptResponse.status);
+
+      const transcriptResponseText = await transcriptResponse.text();
+      console.log(
+        "Transcription response text (first 200 chars):",
+        transcriptResponseText.substring(0, 200)
+      );
+
+      if (!transcriptResponse.ok) {
+        console.error(
+          "Transcription request failed:",
+          transcriptResponse.status,
+          transcriptResponseText
+        );
+
+        if (transcriptResponse.status === 401) {
+          return createErrorResponse("Authentication failed. Please try again.", 401);
+        }
+        if (transcriptResponse.status === 400) {
+          return createErrorResponse(
+            "Invalid transcription request. Please check your file and try again.",
+            400
+          );
+        }
+
+        return createErrorResponse(
+          `Failed to start transcription: ${transcriptResponse.status}`,
+          transcriptResponse.status
+        );
       }
 
-      await new Promise((res) => setTimeout(res, 5000))
-      attempts++
+      if (isHtmlResponse(transcriptResponseText)) {
+        console.error(
+          "Transcription service returned HTML:",
+          transcriptResponseText.substring(0, 500)
+        );
+        return createErrorResponse("Transcription service error. Please try again.", 502);
+      }
+
+      try {
+        transcriptData = JSON.parse(transcriptResponseText);
+        console.log("Successfully parsed transcription response:", transcriptData);
+      } catch (parseError) {
+        console.error("Failed to parse transcription response:", parseError);
+        return createErrorResponse(
+          "Invalid response from transcription service. Please try again.",
+          502
+        );
+      }
+    } catch (error) {
+      console.error("Transcription request failed:", error);
+      return createErrorResponse("Failed to start transcription. Please try again.", 500);
+    }
+
+    const transcriptId = transcriptData.id;
+    if (!transcriptId) {
+      console.error("No transcript ID in response:", transcriptData);
+      return createErrorResponse("Transcription failed to start. Please try again.", 502);
+    }
+
+    /* ---------- Step 3: Poll for completion ---------- */
+    let transcript;
+    let attempts = 0;
+    const maxAttempts = 60; // 5 minutes max (5-second intervals)
+
+    while (attempts < maxAttempts) {
+      try {
+        console.log(`Checking transcription status (attempt ${attempts + 1})...`);
+
+        const statusResponse = await fetch(
+          `https://api.assemblyai.com/v2/transcript/${transcriptId}`,
+          {
+            headers: { authorization: ASSEMBLYAI_API_KEY },
+          }
+        );
+
+        if (!statusResponse.ok) {
+          console.error("Status check failed:", statusResponse.status);
+          if (attempts > 5) {
+            return createErrorResponse(
+              "Failed to check transcription status. Please try again.",
+              502
+            );
+          }
+        } else {
+          const statusText = await statusResponse.text();
+
+          if (isHtmlResponse(statusText)) {
+            console.error("Status check returned HTML:", statusText.substring(0, 200));
+            if (attempts > 5) {
+              return createErrorResponse(
+                "Transcription service error. Please try again.",
+                502
+              );
+            }
+          } else {
+            try {
+              transcript = JSON.parse(statusText);
+              console.log(`Transcription status: ${transcript.status}`);
+
+              if (transcript.status === "completed") {
+                console.log("Transcription completed successfully");
+                break;
+              } else if (transcript.status === "error") {
+                console.error("Transcription error:", transcript.error);
+                return createErrorResponse(
+                  `Transcription failed: ${transcript.error || "Unknown error"}`,
+                  500
+                );
+              }
+            } catch (parseError) {
+              console.error("Failed to parse status response:", parseError);
+              if (attempts > 5) {
+                return createErrorResponse(
+                  "Invalid response from transcription service. Please try again.",
+                  502
+                );
+              }
+            }
+          }
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+        attempts++;
+      } catch (error) {
+        console.error("Status polling error:", error);
+        if (attempts > 10) {
+          return createErrorResponse(
+            "Network error during transcription. Please try again.",
+            500
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+        attempts++;
+      }
     }
 
     if (!transcript || transcript.status !== "completed") {
-      return createErrorResponse("Transcription timed out or failed.", 408)
+      return createErrorResponse(
+        "Transcription timeout. Please try with a shorter file or contact support.",
+        408
+      );
     }
 
-    // Generate Gemini summary
-    let summary = "AI-generated summary not available"
-    let topics = ["General Discussion"]
-    let insights = "No insights available"
+    if (!transcript.text) {
+      return createErrorResponse(
+        "Transcription completed but no text was generated. Please try again.",
+        500
+      );
+    }
+
+    console.log("Transcription text length:", transcript.text.length);
+
+    /* ---------- Step 4: Gemini summary ---------- */
+    let summary = "AI-generated summary not available";
+    let topics = ["General Discussion"];
+    let insights = "No insights available";
 
     try {
-      const maxTranscriptLength = 32000
-      const transcriptSnippet = transcript.text.length > maxTranscriptLength
-        ? transcript.text.slice(0, maxTranscriptLength) + "...[truncated]"
-        : transcript.text
+      console.log("Generating AI summary...");
 
-      const summaryPrompt = `Please analyze this transcript and provide a structured response:
+      const maxLen = 32000;
+      const snippet =
+        transcript.text.length > maxLen
+          ? transcript.text.substring(0, maxLen) + "...[truncated]"
+          : transcript.text;
 
-TRANSCRIPT: "${transcriptSnippet}"
+      const prompt = `Please analyze this transcript and provide a structured response:
+
+TRANSCRIPT: "${snippet}"
 
 Please provide:
 1. SUMMARY: Write a clear, concise summary in 2-3 sentences
@@ -108,55 +260,75 @@ Please provide:
 Format your response exactly like this:
 SUMMARY: [Your summary here]
 TOPICS: [topic1, topic2, topic3]
-INSIGHTS: [Your insights here]`
+INSIGHTS: [Your insights here]`;
 
-      const geminiRes = await fetch(
+      const geminiResponse = await fetch(
         `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            contents: [{ parts: [{ text: summaryPrompt }] }],
+            contents: [
+              {
+                parts: [{ text: prompt }],
+              },
+            ],
             generationConfig: {
               temperature: 0.7,
               topK: 40,
               topP: 0.95,
               maxOutputTokens: 1024,
             },
+            safetySettings: [
+              { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+              { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+              { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+              { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+            ],
           }),
         }
-      )
+      );
 
-      if (geminiRes.ok) {
-        const geminiData = await geminiRes.json()
-        const output = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || ""
+      if (geminiResponse.ok) {
+        const geminiData = await geminiResponse.json();
+        const generatedText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "";
 
-        const summaryMatch = output.match(/SUMMARY:\s*(.+?)(?=TOPICS:|$)/s)
-        const topicsMatch = output.match(/TOPICS:\s*(.+?)(?=INSIGHTS:|$)/s)
-        const insightsMatch = output.match(/INSIGHTS:\s*(.+?)$/s)
+        if (generatedText) {
+          const summaryMatch = generatedText.match(/SUMMARY:\s*(.+?)(?=TOPICS:|$)/s);
+          const topicsMatch = generatedText.match(/TOPICS:\s*(.+?)(?=INSIGHTS:|$)/s);
+          const insightsMatch = generatedText.match(/INSIGHTS:\s*(.+?)$/s);
 
-        if (summaryMatch) summary = summaryMatch[1].trim()
-        if (topicsMatch) {
-          topics = topicsMatch[1].split(",").map(t => t.trim()).slice(0, 5)
+          if (summaryMatch) summary = summaryMatch[1].trim();
+          if (topicsMatch) {
+            const topicsText = topicsMatch[1].trim();
+            topics = topicsText
+              .split(",")
+              .map((t) => t.trim())
+              .filter((t) => t.length > 0)
+              .slice(0, 5);
+          }
+          if (insightsMatch) insights = insightsMatch[1].trim();
         }
-        if (insightsMatch) insights = insightsMatch[1].trim()
       } else {
-        console.warn("Gemini API failed:", geminiRes.status)
+        console.error("Gemini API error:", geminiResponse.status);
       }
-    } catch (err) {
-      console.error("Gemini summary generation failed:", err)
+    } catch (error) {
+      console.error("Gemini API error:", error);
     }
 
+    /* ---------- Step 5: Final response ---------- */
     const speakers = transcript.utterances
       ? [...new Set(transcript.utterances.map((u: any) => u.speaker))]
-      : ["Speaker A"]
+      : ["Speaker A"];
 
-    const timestamps = transcript.utterances?.map((u: any) => ({
-      speaker: u.speaker,
-      start: u.start,
-      end: u.end,
-      text: u.text,
-    })) || []
+    const timestamps = transcript.utterances
+      ? transcript.utterances.map((u: any) => ({
+          speaker: u.speaker,
+          start: u.start,
+          end: u.end,
+          text: u.text,
+        }))
+      : [];
 
     return NextResponse.json({
       id: transcriptId,
@@ -172,11 +344,17 @@ INSIGHTS: [Your insights here]`
       language,
       created_at: new Date().toISOString(),
       file_name: key.split("/").pop(),
-      file_size: transcript.audio_size || 0,
-    })
+      file_size: 0,
+    });
   } catch (error) {
-    console.error("Unhandled error:", error)
-    return createErrorResponse("Unexpected server error. Please try again.", 500)
+    console.error("Unexpected transcription error:", error);
+    if (error instanceof Error) {
+      if (error.message.includes("timeout"))
+        return createErrorResponse("Request timeout", 408);
+      if (error.message.includes("network") || error.message.includes("fetch"))
+        return createErrorResponse("Network error", 503);
+      return createErrorResponse(`Transcription failed: ${error.message}`, 500);
+    }
+    return createErrorResponse("An unexpected error occurred", 500);
   }
 }
-
