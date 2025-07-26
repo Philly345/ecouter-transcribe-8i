@@ -1,40 +1,30 @@
 import { type NextRequest, NextResponse } from "next/server"
 
-// Use environment variables for security
 const ASSEMBLYAI_API_KEY = process.env.ASSEMBLYAI_API_KEY
 const GEMINI_API_KEY     = process.env.GEMINI_API_KEY
-const R2_PUBLIC_URL      = process.env.R2_PUBLIC_URL
 
-// Helper function to create error responses
+export const config = {
+  api: { bodyParser: { sizeLimit: '1kb' } }, // only needs to parse JSON keys
+}
+
 function createErrorResponse(message: string, status = 500) {
   return NextResponse.json({ error: message }, { status })
 }
 
+function isHtmlResponse(text: string): boolean {
+  const trimmed = text.trim()
+  return trimmed.startsWith("<") || trimmed.includes("<!DOCTYPE") || trimmed.includes("<html")
+}
+
 export async function POST(request: NextRequest) {
   try {
-    // This route now accepts JSON with a key, not a file
-    const { 
-      key, 
-      language = "en", 
-      speakerLabels = false, 
-      punctuate = false, 
-      filterProfanity = false, 
-      fileName, 
-      fileSize 
-    } = await request.json()
+    const { key, language = "en", speakerLabels, punctuate, filterProfanity } = await request.json()
 
-    if (!key) {
-      return createErrorResponse("No file key provided", 400)
-    }
-    if (!R2_PUBLIC_URL) {
-      return createErrorResponse("R2_PUBLIC_URL environment variable is not configured.", 500)
-    }
+    if (!key) return createErrorResponse("Missing R2 object key", 400)
 
-    // Construct the public URL using the key from R2
-    const audioUrl = `https://${R2_PUBLIC_URL}/${key}`
-    console.log('Starting transcription for URL:', audioUrl)
+    const audioUrl = `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${key}`
+    console.log("Starting transcription for URL:", audioUrl)
 
-    // Step 1: Request transcription from AssemblyAI
     const transcriptConfig = {
       audio_url: audioUrl,
       language_code: language,
@@ -49,92 +39,144 @@ export async function POST(request: NextRequest) {
     const transcriptResponse = await fetch("https://api.assemblyai.com/v2/transcript", {
       method: "POST",
       headers: {
-        authorization: ASSEMBLYAI_API_KEY,
+        authorization: ASSEMBLYAI_API_KEY!,
         "content-type": "application/json",
       },
       body: JSON.stringify(transcriptConfig),
     })
-    
-    const transcriptResponseData = await transcriptResponse.json()
-    if (!transcriptResponse.ok) {
-      return createErrorResponse(`Failed to start transcription: ${transcriptResponseData.error}`, 400)
+
+    const transcriptResponseText = await transcriptResponse.text()
+
+    if (!transcriptResponse.ok || isHtmlResponse(transcriptResponseText)) {
+      console.error("Failed to start transcription:", transcriptResponse.status, transcriptResponseText)
+      return createErrorResponse("Failed to start transcription. Please try again.", 502)
     }
 
-    const transcriptId = transcriptResponseData.id
-    if (!transcriptId) {
-      return createErrorResponse("Transcription failed to start (no ID received).", 502)
-    }
-    console.log("Transcription started with ID:", transcriptId)
+    const transcriptData = JSON.parse(transcriptResponseText)
+    const transcriptId = transcriptData.id
+    if (!transcriptId) return createErrorResponse("No transcript ID returned", 502)
 
-    // Step 2: Poll for completion
-    let transcript;
-    let attempts = 0;
+    // Polling for completion
+    let attempts = 0
+    let transcript = null
     while (attempts < 60) {
-      const pollResponse = await fetch(`https://api.assemblyai.com/v2/transcript/${transcriptId}`, {
-        headers: { authorization: ASSEMBLYAI_API_KEY },
-      });
-      transcript = await pollResponse.json();
-      if (transcript.status === "completed" || transcript.status === "error") {
-        break;
+      const statusRes = await fetch(`https://api.assemblyai.com/v2/transcript/${transcriptId}`, {
+        headers: { authorization: ASSEMBLYAI_API_KEY! },
+      })
+
+      const statusText = await statusRes.text()
+      if (isHtmlResponse(statusText)) break
+
+      try {
+        transcript = JSON.parse(statusText)
+        if (transcript.status === "completed") break
+        if (transcript.status === "error") {
+          return createErrorResponse(`Transcription failed: ${transcript.error}`, 500)
+        }
+      } catch {
+        console.warn("Polling JSON parse error, retrying...")
       }
-      await new Promise((resolve) => setTimeout(resolve, 5000));
-      attempts++;
+
+      await new Promise((res) => setTimeout(res, 5000))
+      attempts++
     }
 
     if (!transcript || transcript.status !== "completed") {
-      return createErrorResponse(`Transcription timed out or failed: ${transcript?.error || "Unknown error"}`, 500);
+      return createErrorResponse("Transcription timed out or failed.", 408)
     }
 
-    // Step 3: Generate summary with Gemini (logic is unchanged)
+    // Generate Gemini summary
     let summary = "AI-generated summary not available"
     let topics = ["General Discussion"]
     let insights = "No insights available"
+
     try {
-      const maxTranscriptLength = 32000;
-      const transcriptSnippet = transcript.text.substring(0, maxTranscriptLength);
-      const summaryPrompt = `Analyze this transcript:\n\n"${transcriptSnippet}"\n\nProvide:\n1. SUMMARY: A 2-3 sentence summary.\n2. TOPICS: 3-5 main topics, comma-separated.\n3. INSIGHTS: 1-2 key insights.\n\nFormat your response exactly like this:\nSUMMARY: [Your summary]\nTOPICS: [topic1, topic2]\nINSIGHTS: [Your insights]`;
-      
-      const geminiResponse = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
+      const maxTranscriptLength = 32000
+      const transcriptSnippet = transcript.text.length > maxTranscriptLength
+        ? transcript.text.slice(0, maxTranscriptLength) + "...[truncated]"
+        : transcript.text
+
+      const summaryPrompt = `Please analyze this transcript and provide a structured response:
+
+TRANSCRIPT: "${transcriptSnippet}"
+
+Please provide:
+1. SUMMARY: Write a clear, concise summary in 2-3 sentences
+2. TOPICS: List 3-5 main topics discussed (just the topic names, separated by commas)
+3. INSIGHTS: Provide 1-2 key insights or takeaways
+
+Format your response exactly like this:
+SUMMARY: [Your summary here]
+TOPICS: [topic1, topic2, topic3]
+INSIGHTS: [Your insights here]`
+
+      const geminiRes = await fetch(
+        `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+        {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ contents: [{ parts: [{ text: summaryPrompt }] }] }),
-      });
-      
-      if (geminiResponse.ok) {
-          const geminiData = await geminiResponse.json();
-          const generatedText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "";
-          const summaryMatch = generatedText.match(/SUMMARY:\s*(.+?)(?=TOPICS:|$)/s);
-          const topicsMatch = generatedText.match(/TOPICS:\s*(.+?)(?=INSIGHTS:|$)/s);
-          const insightsMatch = generatedText.match(/INSIGHTS:\s*(.+?)$/s);
-          if (summaryMatch) summary = summaryMatch[1].trim();
-          if (topicsMatch) topics = topicsMatch[1].trim().split(",").map(t => t.trim()).filter(Boolean);
-          if (insightsMatch) insights = insightsMatch[1].trim();
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: summaryPrompt }] }],
+            generationConfig: {
+              temperature: 0.7,
+              topK: 40,
+              topP: 0.95,
+              maxOutputTokens: 1024,
+            },
+          }),
+        }
+      )
+
+      if (geminiRes.ok) {
+        const geminiData = await geminiRes.json()
+        const output = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || ""
+
+        const summaryMatch = output.match(/SUMMARY:\s*(.+?)(?=TOPICS:|$)/s)
+        const topicsMatch = output.match(/TOPICS:\s*(.+?)(?=INSIGHTS:|$)/s)
+        const insightsMatch = output.match(/INSIGHTS:\s*(.+?)$/s)
+
+        if (summaryMatch) summary = summaryMatch[1].trim()
+        if (topicsMatch) {
+          topics = topicsMatch[1].split(",").map(t => t.trim()).slice(0, 5)
+        }
+        if (insightsMatch) insights = insightsMatch[1].trim()
+      } else {
+        console.warn("Gemini API failed:", geminiRes.status)
       }
-    } catch (error) {
-      console.error("Gemini API error:", error);
+    } catch (err) {
+      console.error("Gemini summary generation failed:", err)
     }
-    
-    // Step 4: Format final response
-    const result = {
+
+    const speakers = transcript.utterances
+      ? [...new Set(transcript.utterances.map((u: any) => u.speaker))]
+      : ["Speaker A"]
+
+    const timestamps = transcript.utterances?.map((u: any) => ({
+      speaker: u.speaker,
+      start: u.start,
+      end: u.end,
+      text: u.text,
+    })) || []
+
+    return NextResponse.json({
       id: transcriptId,
       transcript: transcript.text,
       summary,
       topics,
       insights,
-      speakers: [...new Set(transcript.utterances?.map((u) => u.speaker) || ["A"])],
-      timestamps: transcript.utterances?.map((u) => ({ speaker: u.speaker, start: u.start, end: u.end, text: u.text })) || [],
+      speakers,
+      timestamps,
       confidence: transcript.confidence || 0.95,
       duration: transcript.audio_duration || 0,
       word_count: transcript.words?.length || 0,
-      language: transcript.language_code || language,
+      language,
       created_at: new Date().toISOString(),
-      file_name: fileName,
-      file_size: fileSize,
-    }
-
-    return NextResponse.json(result)
+      file_name: key.split("/").pop(),
+      file_size: transcript.audio_size || 0,
+    })
   } catch (error) {
-    console.error("Unexpected transcription error:", error)
-    return createErrorResponse("An unexpected error occurred. Please try again.", 500)
+    console.error("Unhandled error:", error)
+    return createErrorResponse("Unexpected server error. Please try again.", 500)
   }
 }
+
