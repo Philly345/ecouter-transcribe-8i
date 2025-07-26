@@ -21,10 +21,8 @@ function isHtmlResponse(text: string): boolean {
   )
 }
 
-// Set a small body size limit, as we only expect a small JSON payload.
-export const config = {
-  api: { bodyParser: { sizeLimit: '1kb' } },
-}
+// NOTE: The 'export const config' object was removed as it's deprecated in Next.js 14+.
+// The new architecture doesn't require it.
 
 export async function POST(request: NextRequest) {
   try {
@@ -49,7 +47,7 @@ export async function POST(request: NextRequest) {
 
     // Construct the public URL for the file in Cloudflare R2.
     // NOTE: This assumes your R2 bucket is public.
-    const audioUrl = `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${R2_BUCKET_NAME}/${key}`
+    const audioUrl = `https://://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${R2_BUCKET_NAME}/${key}`
 
     console.log('Starting transcription for URL:', audioUrl)
 
@@ -127,7 +125,7 @@ export async function POST(request: NextRequest) {
 
     console.log("Transcription started with ID:", transcriptId)
 
-    // Step 3: Poll for completion with shorter timeout
+    // Step 3: Poll for completion
     let transcript
     let attempts = 0
     const maxAttempts = 60 // 5 minutes max (5 second intervals)
@@ -144,14 +142,12 @@ export async function POST(request: NextRequest) {
 
         if (!statusResponse.ok) {
           console.error("Status check failed:", statusResponse.status)
-          // Continue trying for a few more attempts
-          if (attempts > 5) {
+          if (attempts > 5) { // Stop if it consistently fails
             return createErrorResponse("Failed to check transcription status. Please try again.", 502)
           }
         } else {
           const statusText = await statusResponse.text()
 
-          // Check if status response is HTML
           if (isHtmlResponse(statusText)) {
             console.error("Status check returned HTML:", statusText.substring(0, 200))
             if (attempts > 5) {
@@ -178,12 +174,11 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        // Wait 5 seconds before next poll
         await new Promise((resolve) => setTimeout(resolve, 5000))
         attempts++
       } catch (error) {
         console.error("Status polling error:", error)
-        if (attempts > 10) {
+        if (attempts > 10) { // Stop after several network errors
           return createErrorResponse("Network error during transcription. Please try again.", 500)
         }
         await new Promise((resolve) => setTimeout(resolve, 5000))
@@ -209,7 +204,6 @@ export async function POST(request: NextRequest) {
     try {
       console.log("Generating AI summary...")
 
-      // Truncate transcript to Gemini's token limit
       const maxTranscriptLength = 32000; // Gemini 1.5 Flash token limit
       const transcriptSnippet = transcript.text.length > maxTranscriptLength
         ? transcript.text.substring(0, maxTranscriptLength) + "...[truncated]"
@@ -237,15 +231,7 @@ INSIGHTS: [Your insights here]`
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            contents: [
-              {
-                parts: [
-                  {
-                    text: summaryPrompt,
-                  },
-                ],
-              },
-            ],
+            contents: [{ parts: [{ text: summaryPrompt }] }],
             generationConfig: {
               temperature: 0.7,
               topK: 40,
@@ -267,7 +253,6 @@ INSIGHTS: [Your insights here]`
         const generatedText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || ""
 
         if (generatedText) {
-          // Parse the structured response
           const summaryMatch = generatedText.match(/SUMMARY:\s*(.+?)(?=TOPICS:|$)/s)
           const topicsMatch = generatedText.match(/TOPICS:\s*(.+?)(?=INSIGHTS:|$)/s)
           const insightsMatch = generatedText.match(/INSIGHTS:\s*(.+?)$/s)
@@ -285,7 +270,6 @@ INSIGHTS: [Your insights here]`
       }
     } catch (error) {
       console.error("Gemini API error:", error)
-      // Continue without AI summary - transcription is still successful
     }
 
     // Step 5: Format response
@@ -324,7 +308,6 @@ INSIGHTS: [Your insights here]`
   } catch (error) {
     console.error("Unexpected transcription error:", error)
 
-    // Handle specific error types
     if (error instanceof Error) {
       if (error.message.includes("timeout")) {
         return createErrorResponse("Request timeout. Please try with a smaller file.", 408)
