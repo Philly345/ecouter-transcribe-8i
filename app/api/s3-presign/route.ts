@@ -15,21 +15,44 @@ export async function POST(req: NextRequest) {
   try {
     const { fileName, fileType } = await req.json()
     
-    // Create a unique key for the file
-    const Key = `uploads/${Date.now()}-${fileName.replace(/\s/g, '_')}`
+    if (!fileName || !fileType) {
+      return NextResponse.json(
+        { error: 'Both fileName and fileType are required' },
+        { status: 400 }
+      )
+    }
+
+    // Create a unique key with timestamp and sanitized filename
+    const Key = `uploads/${Date.now()}-${fileName
+      .replace(/\s+/g, '_')
+      .replace(/[^a-zA-Z0-9_\-.]/g, '')}`
     
     const command = new PutObjectCommand({ 
-        Bucket: process.env.R2_BUCKET_NAME, 
-        Key, 
-        ContentType: fileType 
-    });
+      Bucket: process.env.R2_BUCKET_NAME, 
+      Key, 
+      ContentType: fileType,
+      // Optional: Add metadata if needed
+      // Metadata: {
+      //   uploadedBy: 'your-app-name',
+      //   originalName: fileName
+      // }
+    })
 
-    const url = await getSignedUrl(s3, command, { expiresIn: 600 }); // URL expires in 10 minutes
+    const url = await getSignedUrl(s3, command, { 
+      expiresIn: 600 // URL expires in 10 minutes
+    })
 
-    return NextResponse.json({ uploadUrl: url, key: Key });
+    return NextResponse.json({ 
+      uploadUrl: url, 
+      key: Key,
+      publicUrl: `https://${process.env.R2_PUBLIC_URL}/${Key}`
+    })
 
   } catch (error) {
-    console.error("Error creating presigned URL:", error);
-    return NextResponse.json({ error: 'Failed to create upload URL.' }, { status: 500 });
+    console.error("Error creating presigned URL:", error)
+    return NextResponse.json(
+      { error: 'Failed to create upload URL' }, 
+      { status: 500 }
+    )
   }
 }
