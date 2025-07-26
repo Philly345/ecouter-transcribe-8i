@@ -2,6 +2,8 @@ import { type NextRequest, NextResponse } from "next/server"
 
 const ASSEMBLYAI_API_KEY = process.env.ASSEMBLYAI_API_KEY
 const GEMINI_API_KEY     = process.env.GEMINI_API_KEY
+const R2_ACCOUNT_ID      = process.env.R2_ACCOUNT_ID
+const R2_BUCKET_NAME     = process.env.R2_BUCKET_NAME
 
 // Helper function to create error responses
 function createErrorResponse(message: string, status = 500) {
@@ -19,176 +21,41 @@ function isHtmlResponse(text: string): boolean {
   )
 }
 
+// Set a small body size limit, as we only expect a small JSON payload.
+export const config = {
+  api: { bodyParser: { sizeLimit: '1kb' } },
+}
+
 export async function POST(request: NextRequest) {
   try {
-    const formData = await request.formData()
-    const file = formData.get("file") as File
-    const language = (formData.get("language") as string) || "en"
-    const speakerLabels = formData.get("speakerLabels") === "true"
-    const punctuate = formData.get("punctuate") === "true"
-    const filterProfanity = formData.get("filterProfanity") === "true"
+    // Step 1: Get the R2 file key and other options from the JSON request body.
+    const { 
+      key, 
+      language = "en", 
+      speakerLabels = false, 
+      punctuate = false, 
+      filterProfanity = false, 
+      fileName = "audio.file", 
+      fileSize = 0 
+    } = await request.json()
 
-    if (!file) {
-      return createErrorResponse("No file provided", 400)
+    if (!key) {
+      return createErrorResponse("No file key provided", 400)
     }
 
-    // Updated file size limits
-    const MAX_DIRECT_UPLOAD_SIZE = 25 * 1024 * 1024 // 25MB
-    const MAX_RESUMABLE_SIZE = 5 * 1024 * 1024 * 1024 // 5GB
-
-    if (file.size > MAX_RESUMABLE_SIZE) {
-      return createErrorResponse(
-        "File too large. Maximum size is 5GB. Please use a smaller file.",
-        413,
-      )
+    if (!R2_ACCOUNT_ID || !R2_BUCKET_NAME) {
+      return createErrorResponse("R2 environment variables are not configured on the server.", 500)
     }
 
-    // Validate file type
-    const isAudio = file.type.startsWith("audio/")
-    const isVideo = file.type.startsWith("video/")
-    if (!isAudio && !isVideo) {
-      return createErrorResponse("Invalid file type. Please upload an audio or video file.", 400)
-    }
+    // Construct the public URL for the file in Cloudflare R2.
+    // NOTE: This assumes your R2 bucket is public.
+    const audioUrl = `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${R2_BUCKET_NAME}/${key}`
 
-    console.log(
-      "Starting transcription for file:",
-      file.name,
-      "Size:",
-      file.size,
-      "Type:",
-      file.type,
-      "Language:",
-      language,
-    )
+    console.log('Starting transcription for URL:', audioUrl)
 
-    // Step 1: Upload file to AssemblyAI
-    let uploadResponse
-    let uploadData
-
-    try {
-      console.log("Uploading file to AssemblyAI...")
-
-      if (file.size <= MAX_DIRECT_UPLOAD_SIZE) {
-        // Direct upload for small files
-        const fileBuffer = await file.arrayBuffer()
-        uploadResponse = await fetch("https://api.assemblyai.com/v2/upload", {
-          method: "POST",
-          headers: {
-            authorization: ASSEMBLYAI_API_KEY,
-            "content-type": "application/octet-stream",
-          },
-          body: fileBuffer,
-        })
-      } else {
-        // Resumable upload for large files
-        uploadResponse = await fetch("https://api.assemblyai.com/v2/upload", {
-          method: "POST",
-          headers: {
-            authorization: ASSEMBLYAI_API_KEY,
-            "transfer-encoding": "chunked",
-          },
-          body: file.stream(),
-        })
-      }
-
-      console.log("Upload response status:", uploadResponse.status)
-      console.log("Upload response headers:", Object.fromEntries(uploadResponse.headers.entries()))
-
-      // Get response text first to check what we received
-      const responseText = await uploadResponse.text()
-      console.log("Upload response text (first 200 chars):", responseText.substring(0, 200))
-
-      // Check if response is HTML (error page) before trying to parse JSON
-      if (isHtmlResponse(responseText)) {
-        console.error("Received HTML response instead of JSON:", responseText.substring(0, 500))
-
-        // Parse common HTML error patterns
-        if (responseText.includes("Request Entity Too Large") || responseText.includes("413")) {
-          return createErrorResponse("File too large for upload. Please use a smaller file.", 413)
-        }
-        if (responseText.includes("Bad Gateway") || responseText.includes("502")) {
-          return createErrorResponse("Upload service temporarily unavailable. Please try again in a few minutes.", 502)
-        }
-        if (responseText.includes("Service Unavailable") || responseText.includes("503")) {
-          return createErrorResponse("Upload service temporarily unavailable. Please try again later.", 503)
-        }
-        if (responseText.includes("Gateway Timeout") || responseText.includes("504")) {
-          return createErrorResponse("Upload timeout. Please try with a smaller file.", 504)
-        }
-
-        return createErrorResponse("Upload service returned an error. Please try again or contact support.", 502)
-      }
-
-      // Check HTTP status after confirming it's not HTML
-      if (!uploadResponse.ok) {
-        console.error("Upload failed with status:", uploadResponse.status)
-
-        if (uploadResponse.status === 413) {
-          return createErrorResponse("File too large for upload. Please use a smaller file.", 413)
-        }
-        if (uploadResponse.status === 401) {
-          return createErrorResponse("Authentication failed. Please try again.", 401)
-        }
-        if (uploadResponse.status === 429) {
-          return createErrorResponse("Rate limit exceeded. Please wait a moment and try again.", 429)
-        }
-        if (uploadResponse.status >= 500) {
-          return createErrorResponse(
-            "Upload service temporarily unavailable. Please try again later.",
-            uploadResponse.status,
-          )
-        }
-
-        return createErrorResponse(
-          `Upload failed with status ${uploadResponse.status}. Please try again.`,
-          uploadResponse.status,
-        )
-      }
-
-      // Try to parse as JSON only if it's not HTML and status is OK
-      try {
-        uploadData = JSON.parse(responseText)
-        console.log("Successfully parsed upload response:", uploadData)
-      } catch (parseError) {
-        console.error("Failed to parse upload response as JSON:", parseError)
-        console.error("Response text was:", responseText)
-
-        // If it's not JSON but status was OK, there might be a service issue
-        return createErrorResponse(
-          "Upload service returned invalid response. Please try again or contact support.",
-          502,
-        )
-      }
-    } catch (error) {
-      console.error("Upload request failed:", error)
-
-      if (error instanceof TypeError && error.message.includes("fetch")) {
-        return createErrorResponse("Network error during upload. Please check your connection and try again.", 503)
-      }
-      if (error instanceof Error && error.message.includes("timeout")) {
-        return createErrorResponse("Upload timeout. Please try with a smaller file.", 408)
-      }
-
-      return createErrorResponse("Upload request failed. Please try again.", 500)
-    }
-
-    // Validate upload response structure
-    if (!uploadData || typeof uploadData !== "object") {
-      console.error("Upload response is not a valid object:", uploadData)
-      return createErrorResponse("Invalid upload response format. Please try again.", 502)
-    }
-
-    if (!uploadData.upload_url) {
-      console.error("No upload_url in response:", uploadData)
-      return createErrorResponse("Upload completed but no URL received. Please try again.", 502)
-    }
-
-    const uploadUrl = uploadData.upload_url
-    console.log("File uploaded successfully to:", uploadUrl)
-
-    // Step 2: Request transcription
+    // Step 2: Request transcription from AssemblyAI
     const transcriptConfig = {
-      audio_url: uploadUrl,
+      audio_url: audioUrl,
       language_code: language,
       speaker_labels: speakerLabels,
       punctuate: punctuate,
@@ -386,22 +253,10 @@ INSIGHTS: [Your insights here]`
               maxOutputTokens: 1024,
             },
             safetySettings: [
-              {
-                category: "HARM_CATEGORY_HARASSMENT",
-                threshold: "BLOCK_MEDIUM_AND_ABOVE",
-              },
-              {
-                category: "HARM_CATEGORY_HATE_SPEECH",
-                threshold: "BLOCK_MEDIUM_AND_ABOVE",
-              },
-              {
-                category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                threshold: "BLOCK_MEDIUM_AND_ABOVE",
-              },
-              {
-                category: "HARM_CATEGORY_DANGEROUS_CONTENT",
-                threshold: "BLOCK_MEDIUM_AND_ABOVE",
-              },
+              { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+              { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+              { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+              { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
             ],
           }),
         },
@@ -417,22 +272,11 @@ INSIGHTS: [Your insights here]`
           const topicsMatch = generatedText.match(/TOPICS:\s*(.+?)(?=INSIGHTS:|$)/s)
           const insightsMatch = generatedText.match(/INSIGHTS:\s*(.+?)$/s)
 
-          if (summaryMatch) {
-            summary = summaryMatch[1].trim()
-          }
-
+          if (summaryMatch) summary = summaryMatch[1].trim()
           if (topicsMatch) {
-            const topicsText = topicsMatch[1].trim()
-            topics = topicsText
-              .split(",")
-              .map((topic) => topic.trim())
-              .filter((topic) => topic.length > 0)
-              .slice(0, 5)
+            topics = topicsMatch[1].trim().split(",").map((t) => t.trim()).filter(Boolean).slice(0, 5)
           }
-
-          if (insightsMatch) {
-            insights = insightsMatch[1].trim()
-          }
+          if (insightsMatch) insights = insightsMatch[1].trim()
 
           console.log("AI summary generated successfully")
         }
@@ -471,8 +315,8 @@ INSIGHTS: [Your insights here]`
       word_count: transcript.words?.length || 0,
       language: language,
       created_at: new Date().toISOString(),
-      file_name: file.name,
-      file_size: file.size,
+      file_name: fileName,
+      file_size: fileSize,
     }
 
     console.log("Transcription process completed successfully")
